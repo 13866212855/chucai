@@ -78,6 +78,8 @@ export function RecordDetailModal({
                   ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                   : record.status === '已归档'
                   ? 'bg-slate-100 text-slate-700 border border-slate-300'
+                  : record.status === '已驳回'
+                  ? 'bg-rose-50 text-rose-700 border border-rose-200'
                   : 'bg-amber-50 text-amber-700 border border-amber-200'
               }`}>
                 {record.status}

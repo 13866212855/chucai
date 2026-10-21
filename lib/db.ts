@@ -1,7 +1,7 @@
 import initSqlJs, { Database, SqlJsStatic } from 'sql.js';
 import fs from 'fs';
 import path from 'path';
-import { OutingRecord, OutingFilterParams, OutingStats, ActivityType } from '@/types/outing';
+import { OutingRecord, OutingFilterParams, OutingStats, ActivityType, ApprovalStatus } from '@/types/outing';
 
 let SQL: SqlJsStatic | null = null;
 let dbInstance: Database | null = null;
@@ -518,6 +518,60 @@ export async function deleteRecord(id: string): Promise<boolean> {
   db.run('DELETE FROM outings WHERE id = ?', [id]);
   saveDb();
   return true;
+}
+
+export async function batchUpdateStatus(
+  ids: string[],
+  status: ApprovalStatus,
+  approverName: string = '系统管理员',
+  approverNote?: string
+): Promise<number> {
+  if (!ids || ids.length === 0) return 0;
+  const db = await getDatabase();
+  const now = new Date().toISOString();
+  const today = now.slice(0, 10);
+  let updatedCount = 0;
+
+  for (const id of ids) {
+    const existing = await getRecordById(id);
+    if (existing) {
+      const approvalNo =
+        existing.approvalNo ||
+        `OA-OUT-${today.replace(/-/g, '')}-${Math.floor(100 + Math.random() * 900)}`;
+      const note = approverNote !== undefined ? approverNote : (existing.approverNote || `后台批量处理：${status}`);
+
+      const stmt = db.prepare(`
+        UPDATE outings SET
+          status = ?,
+          approval_no = ?,
+          approval_date = ?,
+          approver_name = ?,
+          approver_note = ?,
+          updated_at = ?
+        WHERE id = ?
+      `);
+      stmt.run([status, approvalNo, today, approverName, note, now, id]);
+      stmt.free();
+      updatedCount++;
+    }
+  }
+
+  saveDb();
+  return updatedCount;
+}
+
+export async function batchDeleteRecords(ids: string[]): Promise<number> {
+  if (!ids || ids.length === 0) return 0;
+  const db = await getDatabase();
+  let deletedCount = 0;
+
+  for (const id of ids) {
+    db.run('DELETE FROM outings WHERE id = ?', [id]);
+    deletedCount++;
+  }
+
+  saveDb();
+  return deletedCount;
 }
 
 export async function getStats(): Promise<OutingStats> {

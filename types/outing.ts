@@ -1,6 +1,6 @@
 export type ActivityType = '出差' | '学习培训' | '其他';
 
-export type ApprovalStatus = '待审批' | '已审批' | '已归档' | '草稿';
+export type ApprovalStatus = '待审批' | '已审批' | '已归档' | '已驳回' | '草稿';
 
 export interface FileAttachment {
   id: string;

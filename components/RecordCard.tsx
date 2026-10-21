@@ -31,6 +31,7 @@ export function RecordCard({
     待审批: 'bg-amber-50 text-amber-700 border-amber-200',
     已审批: 'bg-emerald-50 text-emerald-700 border-emerald-200',
     已归档: 'bg-slate-100 text-slate-700 border-slate-300',
+    已驳回: 'bg-rose-50 text-rose-700 border-rose-200',
     草稿: 'bg-gray-100 text-gray-600 border-gray-200',
   };
 
