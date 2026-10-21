@@ -1,0 +1,6 @@
+{
+  "name": "外出事务管理",
+  "description": "面向职场人员的外出事务管理H5应用，记录出差、培训及外出活动，一键生成标准公务出差审批单与报账凭证。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
