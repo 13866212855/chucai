@@ -133,7 +133,7 @@ export function RecordDetailModal({
                 <span className="font-semibold text-[11px]">核算天数</span>
               </div>
               <div className="text-xl font-bold font-mono text-blue-900">
-                {record.durationDays} <span className="text-xs font-normal text-slate-500">天</span>
+                {Math.max(1, Math.round(record.durationDays || 1))} <span className="text-xs font-normal text-slate-500">天</span>
               </div>
             </div>
           </div>

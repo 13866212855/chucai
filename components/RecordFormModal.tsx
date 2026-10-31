@@ -61,11 +61,12 @@ function computeDays(startStr: string, endStr: string): number {
   if (isNaN(start.getTime()) || isNaN(end.getTime())) return 1;
 
   const diffMs = end.getTime() - start.getTime();
-  if (diffMs <= 0) return 0.5;
+  if (diffMs <= 0) return 1;
 
   const diffHours = diffMs / (1000 * 60 * 60);
-  let days = Math.round((diffHours / 24) * 2) / 2;
-  return days < 0.5 ? 0.5 : days;
+  // 整天计算：向上取整为整天数，最低为 1 天，绝对不能出现 0.5 或小数
+  const days = Math.max(1, Math.ceil(diffHours / 24));
+  return Math.round(days);
 }
 
 function getDefaultTimes() {
@@ -105,7 +106,7 @@ function getInitialFormValues(
           : ['耿棚', '颍上'],
       startTime: initialData.startTime,
       endTime: initialData.endTime,
-      durationDays: initialData.durationDays,
+      durationDays: Math.max(1, Math.round(initialData.durationDays || 1)),
       budgetBreakdown: initialData.budgetBreakdown || {
         transport: 1800,
         accommodation: 1400,
@@ -136,7 +137,7 @@ function getInitialFormValues(
                 : ['耿棚', '颍上'],
             startTime: parsed.startTime,
             endTime: parsed.endTime,
-            durationDays: parsed.durationDays,
+            durationDays: Math.max(1, Math.round(parsed.durationDays || 1)),
             budgetBreakdown: parsed.budgetBreakdown || {
               transport: 1800,
               accommodation: 1400,
@@ -167,7 +168,7 @@ function getInitialFormValues(
           : ['耿棚', '颍上'],
       startTime: latestRecord.startTime,
       endTime: latestRecord.endTime,
-      durationDays: latestRecord.durationDays,
+      durationDays: Math.max(1, Math.round(latestRecord.durationDays || 1)),
       budgetBreakdown: latestRecord.budgetBreakdown || {
         transport: 1800,
         accommodation: 1400,
@@ -252,6 +253,7 @@ function RecordFormContent({
 
   // Step in 3-step wizard (1: 基本信息与行程, 2: 时间与预算, 3: 凭据与照片)
   const [currentStep, setCurrentStep] = useState<number>(1);
+  const [step3ReadyAt, setStep3ReadyAt] = useState<number>(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [draftSavedTip, setDraftSavedTip] = useState<string | null>(null);
   const [isAutoFilled, setIsAutoFilled] = useState<boolean>(initialValues.isLoadedFromPrevious);
@@ -582,19 +584,76 @@ function RecordFormContent({
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Safe step navigation
+  const goToStep = (step: number) => {
+    if (step === 2 && currentStep === 1) {
+      if (!title.trim()) {
+        alert('请填写活动主题/主要事由');
+        return;
+      }
+      const validDestinations = destinations.filter((d) => d.trim().length > 0);
+      if (validDestinations.length === 0) {
+        alert('请至少填写一个目的地');
+        return;
+      }
+    }
+    if (step === 3) {
+      // Cooldown to prevent ghost-clicks or rapid double-clicks on "下一步" from triggering submit
+      setStep3ReadyAt(Date.now() + 350);
+    }
+    setCurrentStep(step);
+  };
+
+  const handleNextStep = () => {
+    if (currentStep === 1) {
+      if (!title.trim()) {
+        alert('请填写活动主题/主要事由');
+        return;
+      }
+      const validDestinations = destinations.filter((d) => d.trim().length > 0);
+      if (validDestinations.length === 0) {
+        alert('请至少填写一个目的地');
+        return;
+      }
+      goToStep(2);
+    } else if (currentStep === 2) {
+      if (!startTime || !endTime) {
+        alert('请设置完整的出发和返回时间');
+        return;
+      }
+      // Enter Step 3 cleanly
+      goToStep(3);
+    }
+  };
+
+  const handleSubmit = async (e?: React.FormEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
+    // STRICT CHECK: If user is on Step 1 or Step 2, NEVER submit to completion!
+    // Instead smoothly advance to the next step
+    if (currentStep < 3) {
+      handleNextStep();
+      return;
+    }
+
+    // Prevent accidental click-through if triggered within 350ms of entering step 3
+    if (Date.now() < step3ReadyAt) {
+      return;
+    }
 
     if (!title.trim()) {
       alert('请填写活动主题/事由');
-      setCurrentStep(1);
+      goToStep(1);
       return;
     }
 
     const validDestinations = destinations.filter((d) => d.trim().length > 0);
     if (validDestinations.length === 0) {
       alert('请至少填写一个目的地');
-      setCurrentStep(1);
+      goToStep(1);
       return;
     }
 
@@ -715,7 +774,7 @@ function RecordFormContent({
       <div className="grid grid-cols-3 bg-slate-50 border-b border-slate-200 text-xs">
         <button
           type="button"
-          onClick={() => setCurrentStep(1)}
+          onClick={() => goToStep(1)}
           className={`py-2 text-center font-medium border-b-2 transition-colors ${
             currentStep === 1
               ? 'border-blue-600 text-blue-800 bg-white font-bold'
@@ -726,7 +785,7 @@ function RecordFormContent({
         </button>
         <button
           type="button"
-          onClick={() => setCurrentStep(2)}
+          onClick={() => goToStep(2)}
           className={`py-2 text-center font-medium border-b-2 transition-colors ${
             currentStep === 2
               ? 'border-blue-600 text-blue-800 bg-white font-bold'
@@ -737,7 +796,7 @@ function RecordFormContent({
         </button>
         <button
           type="button"
-          onClick={() => setCurrentStep(3)}
+          onClick={() => goToStep(3)}
           className={`py-2 text-center font-medium border-b-2 transition-colors ${
             currentStep === 3
               ? 'border-blue-600 text-blue-800 bg-white font-bold'
@@ -749,7 +808,18 @@ function RecordFormContent({
       </div>
 
       {/* Form Body Scrollable Area */}
-      <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-4 space-y-4 text-slate-800">
+      <form
+        onSubmit={handleSubmit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.target as HTMLElement).tagName !== 'TEXTAREA') {
+            e.preventDefault();
+            if (currentStep < 3) {
+              handleNextStep();
+            }
+          }
+        }}
+        className="flex-1 overflow-y-auto p-4 space-y-4 text-slate-800"
+      >
         {/* STEP 1: 行程基本信息 */}
         {currentStep === 1 && (
           <div className="space-y-3.5 animate-in fade-in duration-150">
@@ -939,7 +1009,7 @@ function RecordFormContent({
                   <button
                     type="button"
                     onClick={() => {
-                      const d = Math.max(0.5, durationDays - 0.5);
+                      const d = Math.max(1, Math.round((durationDays || 1) - 1));
                       setDurationDays(d);
                       persistCurrentForm({ durationDays: d });
                     }}
@@ -948,12 +1018,12 @@ function RecordFormContent({
                     -
                   </button>
                   <span className="font-semibold text-slate-800 min-w-8 text-center">
-                    {durationDays}
+                    {Math.max(1, Math.round(durationDays || 1))}
                   </span>
                   <button
                     type="button"
                     onClick={() => {
-                      const d = durationDays + 0.5;
+                      const d = Math.max(1, Math.round((durationDays || 1) + 1));
                       setDurationDays(d);
                       persistCurrentForm({ durationDays: d });
                     }}
@@ -1071,12 +1141,42 @@ function RecordFormContent({
                 <option value="已归档">已归档（完成行程及核销）</option>
               </select>
             </div>
+
+            {/* Direct transition button to Step 3 */}
+            <div className="pt-2 flex items-center justify-between bg-blue-50/80 p-3 rounded-xl border border-blue-200">
+              <div>
+                <p className="text-xs font-semibold text-blue-900">第 2 步已设置完毕</p>
+                <p className="text-[11px] text-blue-700">下一步上传车票、发票凭据与微信文件</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => goToStep(3)}
+                className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-xs font-semibold rounded-lg shadow-sm flex items-center gap-1.5 transition-all"
+              >
+                <span>下一步：上传凭据 (3/3)</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
         )}
 
         {/* STEP 3: 凭据与照片（支持从微信聊天记录直接拖入） */}
         {currentStep === 3 && (
           <div className="space-y-4 animate-in fade-in duration-150">
+            {/* Guidance banner for Step 3 */}
+            <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-xl text-xs text-emerald-900 flex items-start gap-2.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-emerald-950">第 3 步：上传发票凭据与微信文件</span>
+                  <span className="text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded font-medium">最后一步</span>
+                </div>
+                <p className="text-[11px] text-emerald-700 mt-1 leading-relaxed">
+                  您可以在此上传报销发票、车票截图、微信聊天记录或批复公函（支持直接拖入与粘贴）。确认无误后点击下方【完成并保存记录】。
+                </p>
+              </div>
+            </div>
+
             {/* 1. Notification Files Upload with Direct WeChat Drag Support */}
             <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200">
               <div className="flex items-center justify-between mb-2">
@@ -1347,10 +1447,10 @@ function RecordFormContent({
             {currentStep > 1 && (
               <button
                 type="button"
-                onClick={() => setCurrentStep(currentStep - 1)}
-                className="px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+                onClick={() => goToStep(currentStep - 1)}
+                className="px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors flex items-center gap-1"
               >
-                上一步
+                <span>上一步</span>
               </button>
             )}
           </div>
@@ -1359,22 +1459,18 @@ function RecordFormContent({
             {currentStep < 3 ? (
               <button
                 type="button"
-                onClick={() => {
-                  if (currentStep === 1 && !title.trim()) {
-                    alert('请填写活动主题/主要事由');
-                    return;
-                  }
-                  setCurrentStep(currentStep + 1);
-                }}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-xs font-semibold rounded-lg shadow-sm transition-all"
+                onClick={handleNextStep}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-xs font-semibold rounded-lg shadow-sm transition-all flex items-center gap-1.5"
               >
-                下一步
+                <span>下一步</span>
+                <ArrowRight className="w-3.5 h-3.5" />
               </button>
             ) : (
               <button
-                type="submit"
+                type="button"
+                onClick={() => handleSubmit()}
                 disabled={isSubmitting}
-                className="px-5 py-2 bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-800 hover:to-indigo-800 active:scale-95 text-white text-xs font-bold rounded-lg shadow-md transition-all flex items-center space-x-1.5"
+                className="px-5 py-2 bg-gradient-to-r from-emerald-600 to-blue-700 hover:from-emerald-700 hover:to-blue-800 active:scale-95 text-white text-xs font-bold rounded-lg shadow-md transition-all flex items-center space-x-1.5"
               >
                 {isSubmitting ? (
                   <span>正在保存...</span>

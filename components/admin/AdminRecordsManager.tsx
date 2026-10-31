@@ -579,7 +579,7 @@ export function AdminRecordsManager({
                           {r.startTime?.replace('T', ' ')}
                         </span>
                         <span className="text-[11px] text-slate-500">
-                          共 <strong className="text-blue-600">{r.durationDays}</strong> 天
+                          共 <strong className="text-blue-600">{Math.max(1, Math.round(r.durationDays || 1))}</strong> 天
                         </span>
                       </td>
 

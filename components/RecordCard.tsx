@@ -111,7 +111,7 @@ export function RecordCard({
 
         <div className="flex items-center justify-end space-x-2">
           <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 font-medium text-[11px]">
-            {record.durationDays} 天
+            {Math.max(1, Math.round(record.durationDays || 1))} 天
           </span>
           {record.budget > 0 && (
             <span className="text-slate-700 font-semibold font-mono text-[11px]">

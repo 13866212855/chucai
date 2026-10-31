@@ -40,7 +40,7 @@ const INITIAL_RECORDS: OutingRecord[] = [
     destinations: ['北京', '上海', '杭州'],
     startTime: '2025-05-12T08:30',
     endTime: '2025-05-16T18:00',
-    durationDays: 4.5,
+    durationDays: 5,
     budget: 4800,
     budgetBreakdown: {
       transport: 2200,
@@ -78,7 +78,7 @@ const INITIAL_RECORDS: OutingRecord[] = [
     destinations: ['北京', '深圳'],
     startTime: '2025-05-22T09:00',
     endTime: '2025-05-24T17:30',
-    durationDays: 2.5,
+    durationDays: 3,
     budget: 3200,
     budgetBreakdown: {
       transport: 1600,
@@ -116,7 +116,7 @@ const INITIAL_RECORDS: OutingRecord[] = [
     destinations: ['北京', '成都', '重庆'],
     startTime: '2025-06-05T09:00',
     endTime: '2025-06-09T18:00',
-    durationDays: 4.5,
+    durationDays: 5,
     budget: 5200,
     budgetBreakdown: {
       transport: 2400,
@@ -145,7 +145,7 @@ const INITIAL_RECORDS: OutingRecord[] = [
     destinations: ['北京', '广州'],
     startTime: '2025-06-18T13:00',
     endTime: '2025-06-20T12:00',
-    durationDays: 2.0,
+    durationDays: 2,
     budget: 2500,
     budgetBreakdown: {
       transport: 1400,
@@ -411,7 +411,7 @@ export async function createRecord(data: Partial<OutingRecord>): Promise<OutingR
     destinations: data.destinations && data.destinations.length > 0 ? data.destinations : ['北京'],
     startTime: data.startTime || now.slice(0, 16),
     endTime: data.endTime || now.slice(0, 16),
-    durationDays: data.durationDays !== undefined ? data.durationDays : 1,
+    durationDays: data.durationDays !== undefined ? Math.max(1, Math.round(data.durationDays)) : 1,
     budget: data.budget || 0,
     budgetBreakdown: data.budgetBreakdown || {
       transport: 0,
@@ -452,6 +452,10 @@ export async function updateRecord(id: string, data: Partial<OutingRecord>): Pro
   const updated: OutingRecord = {
     ...existing,
     ...data,
+    durationDays:
+      data.durationDays !== undefined
+        ? Math.max(1, Math.round(data.durationDays))
+        : Math.max(1, Math.round(existing.durationDays || 1)),
     updatedAt: now,
     destinations: data.destinations || existing.destinations,
     files: data.files || existing.files,
