@@ -28,12 +28,15 @@ import {
   CheckSquare,
   Square,
   FileSpreadsheet,
+  Printer,
+  Paperclip,
 } from 'lucide-react';
 import { AdminApprovalModal } from './AdminApprovalModal';
 import { ApprovalSlipModal } from '@/components/ApprovalSlipModal';
 import { RecordDetailModal } from '@/components/RecordDetailModal';
 import { RecordFormModal } from '@/components/RecordFormModal';
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal';
+import { BatchPrintFilesModal } from '@/components/BatchPrintFilesModal';
 
 interface AdminRecordsManagerProps {
   records: OutingRecord[];
@@ -74,6 +77,8 @@ export function AdminRecordsManager({
   const [editRecord, setEditRecord] = useState<OutingRecord | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<OutingRecord | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isBatchPrintOpen, setIsBatchPrintOpen] = useState(false);
+  const [batchPrintIds, setBatchPrintIds] = useState<string[]>([]);
 
   // Status summaries
   const stats = useMemo(() => {
@@ -438,6 +443,18 @@ export function AdminRecordsManager({
 
             <div className="flex items-center space-x-1.5">
               <button
+                type="button"
+                onClick={() => {
+                  setBatchPrintIds(Array.from(selectedIds));
+                  setIsBatchPrintOpen(true);
+                }}
+                className="flex items-center space-x-1 px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-2xs transition-colors cursor-pointer"
+                title="一键打印选中记录已上传的官方红头文件与批件"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>打印选中官方文件</span>
+              </button>
+              <button
                 onClick={() => handleBatch('approve')}
                 className="flex items-center space-x-1 px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium shadow-2xs transition-colors cursor-pointer"
               >
@@ -671,6 +688,22 @@ export function AdminRecordsManager({
                           审批单
                         </button>
 
+                        {/* Print Official Files if available */}
+                        {r.files && r.files.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setBatchPrintIds([r.id]);
+                              setIsBatchPrintOpen(true);
+                            }}
+                            title="一键打印该记录已上传的官方红头文件与批件"
+                            className="px-2 py-1 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-medium text-[11px] border border-emerald-200 transition-colors flex items-center gap-1"
+                          >
+                            <Printer className="w-3 h-3 text-emerald-600" />
+                            <span>公函</span>
+                          </button>
+                        )}
+
                         {/* View Details */}
                         <button
                           onClick={() => setDetailRecord(r)}
@@ -795,6 +828,14 @@ export function AdminRecordsManager({
           }}
         />
       )}
+
+      {/* Batch Print Official Documents & Notices Modal */}
+      <BatchPrintFilesModal
+        isOpen={isBatchPrintOpen}
+        onClose={() => setIsBatchPrintOpen(false)}
+        records={records}
+        initialSelectedRecordIds={batchPrintIds}
+      />
     </div>
   );
 }

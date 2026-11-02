@@ -10,6 +10,7 @@ interface RecordTimelineProps {
   onViewApproval: (record: OutingRecord) => void;
   onEdit: (record: OutingRecord) => void;
   onDelete: (record: OutingRecord) => void;
+  onPrintFiles?: (record: OutingRecord) => void;
 }
 
 export function RecordTimeline({
@@ -17,6 +18,7 @@ export function RecordTimeline({
   onViewApproval,
   onEdit,
   onDelete,
+  onPrintFiles,
 }: RecordTimelineProps) {
   // Group records by month (YYYY-MM)
   const groupedByMonth = React.useMemo(() => {
@@ -74,6 +76,7 @@ export function RecordTimeline({
                   onViewApproval={onViewApproval}
                   onEdit={onEdit}
                   onDelete={onDelete}
+                  onPrintFiles={onPrintFiles}
                 />
               </div>
             ))}

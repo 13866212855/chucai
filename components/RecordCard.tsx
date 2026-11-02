@@ -2,7 +2,21 @@
 
 import React from 'react';
 import { OutingRecord, ActivityType, ApprovalStatus } from '@/types/outing';
-import { Calendar, Clock, MapPin, ArrowRight, Paperclip, Camera, FileText, ChevronRight, Edit3, Trash2 } from 'lucide-react';
+import {
+  Calendar,
+  Clock,
+  MapPin,
+  ArrowRight,
+  Paperclip,
+  Camera,
+  FileText,
+  ChevronRight,
+  Edit3,
+  Trash2,
+  Printer,
+  CheckSquare,
+  Square,
+} from 'lucide-react';
 
 interface RecordCardProps {
   record: OutingRecord;
@@ -10,6 +24,10 @@ interface RecordCardProps {
   onEdit: (record: OutingRecord) => void;
   onDelete: (record: OutingRecord) => void;
   onViewDetails?: (record: OutingRecord) => void;
+  isSelectMode?: boolean;
+  isSelected?: boolean;
+  onToggleSelect?: (record: OutingRecord) => void;
+  onPrintFiles?: (record: OutingRecord) => void;
 }
 
 export function RecordCard({
@@ -18,6 +36,10 @@ export function RecordCard({
   onEdit,
   onDelete,
   onViewDetails,
+  isSelectMode = false,
+  isSelected = false,
+  onToggleSelect,
+  onPrintFiles,
 }: RecordCardProps) {
   // Activity type styling
   const typeBadgeColors: Record<ActivityType, string> = {
@@ -53,28 +75,68 @@ export function RecordCard({
   return (
     <div
       id={`record-card-${record.id}`}
-      className="bg-white rounded-xl border border-slate-200/90 shadow-sm hover:shadow-md transition-all p-3.5 mb-3 overflow-hidden"
+      onClick={() => {
+        if (isSelectMode && onToggleSelect) {
+          onToggleSelect(record);
+        }
+      }}
+      className={`bg-white rounded-xl border transition-all p-3.5 mb-3 overflow-hidden ${
+        isSelected
+          ? 'border-blue-500 ring-2 ring-blue-500/20 bg-blue-50/10 shadow-md'
+          : 'border-slate-200/90 shadow-sm hover:shadow-md'
+      } ${isSelectMode ? 'cursor-pointer' : ''}`}
     >
-      {/* Top Header: Type & Status */}
+      {/* Top Header: Select Checkbox, Type & Status */}
       <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100">
-        <div className="flex items-center space-x-1.5">
-          <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border ${typeBadgeColors[record.activityType] || 'bg-slate-100 text-slate-700'}`}>
+        <div className="flex items-center space-x-1.5 min-w-0">
+          {/* Select Mode Checkbox */}
+          {isSelectMode && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleSelect?.(record);
+              }}
+              className="mr-1 text-blue-600 focus:outline-hidden"
+            >
+              {isSelected ? (
+                <CheckSquare className="w-4 h-4 text-blue-600" />
+              ) : (
+                <Square className="w-4 h-4 text-slate-400" />
+              )}
+            </button>
+          )}
+
+          <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border shrink-0 ${typeBadgeColors[record.activityType] || 'bg-slate-100 text-slate-700'}`}>
             {record.activityType}
           </span>
           <span className="text-xs text-slate-400">·</span>
-          <span className="text-xs text-slate-500 font-mono">
+          <span className="text-xs text-slate-500 font-mono truncate">
             {record.id}
           </span>
         </div>
 
-        <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full border ${statusBadgeColors[record.status] || 'bg-slate-100 text-slate-700'}`}>
-          {record.status}
-        </span>
+        <div className="flex items-center space-x-1.5 shrink-0">
+          {fileCount > 0 && !isSelectMode && (
+            <span className="text-[10px] text-blue-700 bg-blue-50 border border-blue-200/60 px-1.5 py-0.5 rounded font-medium">
+              含官方公函
+            </span>
+          )}
+          <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full border ${statusBadgeColors[record.status] || 'bg-slate-100 text-slate-700'}`}>
+            {record.status}
+          </span>
+        </div>
       </div>
 
       {/* Title */}
       <h3
-        onClick={() => onViewDetails ? onViewDetails(record) : onViewApproval(record)}
+        onClick={(e) => {
+          if (!isSelectMode) {
+            e.stopPropagation();
+            if (onViewDetails) onViewDetails(record);
+            else onViewApproval(record);
+          }
+        }}
         className="text-sm font-bold text-slate-900 line-clamp-2 hover:text-blue-700 cursor-pointer transition-colors mb-2"
       >
         {record.title}
@@ -123,12 +185,28 @@ export function RecordCard({
 
       {/* Attachments & Photos badges */}
       {(fileCount > 0 || photoCount > 0 || record.notes) && (
-        <div className="flex items-center space-x-3 text-[11px] text-slate-500 mb-2.5 pt-1">
+        <div className="flex items-center flex-wrap gap-2 text-[11px] text-slate-500 mb-2.5 pt-1">
           {fileCount > 0 && (
-            <span className="inline-flex items-center gap-1 text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
-              <Paperclip className="w-3 h-3 text-blue-600" />
-              <span>{fileCount} 份文件</span>
-            </span>
+            <div className="inline-flex items-center gap-1.5">
+              <span className="inline-flex items-center gap-1 text-slate-700 bg-slate-100 px-2 py-0.5 rounded border border-slate-200/60 font-medium">
+                <Paperclip className="w-3 h-3 text-blue-600" />
+                <span>{fileCount} 份文件</span>
+              </span>
+              {onPrintFiles && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onPrintFiles(record);
+                  }}
+                  className="inline-flex items-center gap-1 text-[11px] text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200/80 px-2 py-0.5 rounded transition-colors font-medium active:scale-95"
+                  title="一键打印此记录已上传的官方公函文件"
+                >
+                  <Printer className="w-3 h-3 text-emerald-600" />
+                  <span>打印文件</span>
+                </button>
+              )}
+            </div>
           )}
           {photoCount > 0 && (
             <span className="inline-flex items-center gap-1 text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
@@ -137,7 +215,7 @@ export function RecordCard({
             </span>
           )}
           {record.notes && (
-            <span className="truncate text-slate-400 italic text-[11px]">
+            <span className="truncate text-slate-400 italic text-[11px] max-w-[180px]">
               备注: {record.notes}
             </span>
           )}
@@ -176,19 +254,21 @@ export function RecordCard({
         </div>
 
         {/* Generate Official Business Approval Slip */}
-        <button
-          type="button"
-          id={`btn-approval-${record.id}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            onViewApproval(record);
-          }}
-          className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-800 text-xs font-semibold border border-blue-200 transition-all active:scale-95"
-        >
-          <FileText className="w-3.5 h-3.5 text-blue-700" />
-          <span>出差审批单</span>
-          <ChevronRight className="w-3 h-3 text-blue-500" />
-        </button>
+        <div className="flex items-center space-x-1.5">
+          <button
+            type="button"
+            id={`btn-approval-${record.id}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onViewApproval(record);
+            }}
+            className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-800 text-xs font-semibold border border-blue-200 transition-all active:scale-95"
+          >
+            <FileText className="w-3.5 h-3.5 text-blue-700" />
+            <span>出差审批单</span>
+            <ChevronRight className="w-3 h-3 text-blue-500" />
+          </button>
+        </div>
       </div>
     </div>
   );

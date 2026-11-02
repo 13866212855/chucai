@@ -17,6 +17,7 @@ import {
   FileCheck,
   Download,
   Eye,
+  Printer,
 } from 'lucide-react';
 
 interface RecordDetailModalProps {
@@ -26,6 +27,7 @@ interface RecordDetailModalProps {
   onOpenApproval: (record: OutingRecord) => void;
   onEdit: (record: OutingRecord) => void;
   onDelete: (record: OutingRecord) => void;
+  onPrintFiles?: (record: OutingRecord) => void;
 }
 
 export function RecordDetailModal({
@@ -35,6 +37,7 @@ export function RecordDetailModal({
   onOpenApproval,
   onEdit,
   onDelete,
+  onPrintFiles,
 }: RecordDetailModalProps) {
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
 
@@ -187,6 +190,19 @@ export function RecordDetailModal({
                 <Paperclip className="w-3.5 h-3.5 text-blue-600" />
                 <span>相关批复公函及通知文件 ({record.files?.length || 0})</span>
               </span>
+              {record.files && record.files.length > 0 && onPrintFiles && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onPrintFiles(record);
+                  }}
+                  className="text-[11px] text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200/80 px-2 py-0.5 rounded font-semibold flex items-center gap-1 transition-colors"
+                >
+                  <Printer className="w-3 h-3 text-emerald-600" />
+                  <span>打印公函附单</span>
+                </button>
+              )}
             </div>
             {record.files && record.files.length > 0 ? (
               <div className="space-y-1.5">
@@ -283,16 +299,32 @@ export function RecordDetailModal({
             </button>
           </div>
 
-          <button
-            onClick={() => {
-              onClose();
-              onOpenApproval(record);
-            }}
-            className="px-4 py-1.5 rounded-lg bg-blue-700 hover:bg-blue-800 text-white font-bold flex items-center gap-1.5 shadow-sm"
-          >
-            <FileCheck className="w-3.5 h-3.5" />
-            <span>生成出差审批单</span>
-          </button>
+          <div className="flex items-center space-x-2">
+            {record.files && record.files.length > 0 && onPrintFiles && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onPrintFiles(record);
+                }}
+                className="px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-semibold text-xs flex items-center gap-1.5 transition-all"
+              >
+                <Printer className="w-3.5 h-3.5 text-emerald-600" />
+                <span>打印公函附单</span>
+              </button>
+            )}
+
+            <button
+              onClick={() => {
+                onClose();
+                onOpenApproval(record);
+              }}
+              className="px-4 py-1.5 rounded-lg bg-blue-700 hover:bg-blue-800 text-white font-bold flex items-center gap-1.5 shadow-sm"
+            >
+              <FileCheck className="w-3.5 h-3.5" />
+              <span>生成出差审批单</span>
+            </button>
+          </div>
         </div>
 
         {/* Big photo modal */}

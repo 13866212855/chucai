@@ -19,6 +19,7 @@ import { StatsDashboard } from '@/components/StatsDashboard';
 import { ProfileView } from '@/components/ProfileView';
 import { DraftBanner } from '@/components/DraftBanner';
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal';
+import { BatchPrintFilesModal } from '@/components/BatchPrintFilesModal';
 import {
   Plus,
   Search,
@@ -39,6 +40,10 @@ import {
   ArrowRight,
   Database,
   Building,
+  Printer,
+  CheckSquare,
+  Square,
+  Paperclip,
 } from 'lucide-react';
 
 const emptySubscribe = () => () => {};
@@ -83,6 +88,12 @@ export default function OutingApp() {
 
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [selectedDetailRecord, setSelectedDetailRecord] = useState<OutingRecord | null>(null);
+
+  // Batch Print Uploaded Official Documents State
+  const [isBatchPrintOpen, setIsBatchPrintOpen] = useState(false);
+  const [batchPrintInitialRecordIds, setBatchPrintInitialRecordIds] = useState<string[]>([]);
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedRecordIds, setSelectedRecordIds] = useState<Set<string>>(new Set());
 
   // Draft state
   const [draft, setDraft] = useState<OutingRecord | null>(null);
@@ -319,6 +330,48 @@ export default function OutingApp() {
     });
   }, [records, selectedType, selectedStatus, keyword]);
 
+  // Official Documents Print actions
+  const handlePrintSingleRecordFiles = (record: OutingRecord) => {
+    setBatchPrintInitialRecordIds([record.id]);
+    setIsBatchPrintOpen(true);
+  };
+
+  const handleToggleSelectRecord = (record: OutingRecord) => {
+    setSelectedRecordIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(record.id)) {
+        next.delete(record.id);
+      } else {
+        next.add(record.id);
+      }
+      return next;
+    });
+  };
+
+  const handleSelectAllRecordsWithFiles = () => {
+    const withFiles = filteredRecords.filter((r) => r.files && r.files.length > 0);
+    setSelectedRecordIds(new Set(withFiles.map((r) => r.id)));
+  };
+
+  const handleDeselectAllRecords = () => {
+    setSelectedRecordIds(new Set());
+  };
+
+  const handleOpenBatchPrint = (targetIds?: string[]) => {
+    const ids = targetIds && targetIds.length > 0
+      ? targetIds
+      : Array.from(selectedRecordIds);
+
+    // If nothing selected, default to all records with files
+    if (ids.length === 0) {
+      const allWithFiles = records.filter((r) => r.files && r.files.length > 0).map((r) => r.id);
+      setBatchPrintInitialRecordIds(allWithFiles);
+    } else {
+      setBatchPrintInitialRecordIds(ids);
+    }
+    setIsBatchPrintOpen(true);
+  };
+
   const pendingApprovalsCount = records.filter((r) => r.status === '待审批').length;
 
   return (
@@ -504,6 +557,7 @@ export default function OutingApp() {
                       onEdit={handleEditRecord}
                       onDelete={handleRequestDelete}
                       onViewDetails={handleOpenDetail}
+                      onPrintFiles={handlePrintSingleRecordFiles}
                     />
                   ))}
                 </div>
@@ -616,38 +670,118 @@ export default function OutingApp() {
               ))}
             </div>
 
-            {/* View Mode Switcher and Result Summary */}
-            <div className="flex items-center justify-between text-xs text-slate-500 pt-1 px-1">
-              <span>
-                找到 <strong className="text-slate-900 font-mono">{filteredRecords.length}</strong> 条记录
-              </span>
+            {/* View Mode Switcher and Result Summary & Batch Print Action Bar */}
+            <div className="space-y-2 pt-1 px-1">
+              <div className="flex items-center justify-between text-xs text-slate-500">
+                <div className="flex items-center space-x-1.5">
+                  <span>
+                    找到 <strong className="text-slate-900 font-mono">{filteredRecords.length}</strong> 条记录
+                  </span>
+                  <span className="text-slate-300">·</span>
+                  <span className="text-[11px] text-blue-700 font-medium">
+                    {records.reduce((acc, r) => acc + (r.files?.length || 0), 0)} 份官方文件
+                  </span>
+                </div>
 
-              <div className="flex items-center space-x-1 bg-white p-0.5 rounded-lg border border-slate-200 shadow-2xs">
-                <button
-                  onClick={() => setViewMode('card')}
-                  className={`px-2 py-1 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${
-                    viewMode === 'card'
-                      ? 'bg-blue-600 text-white'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                  title="卡片列表视图"
-                >
-                  <List className="w-3.5 h-3.5" />
-                  <span>卡片</span>
-                </button>
-                <button
-                  onClick={() => setViewMode('timeline')}
-                  className={`px-2 py-1 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${
-                    viewMode === 'timeline'
-                      ? 'bg-blue-600 text-white'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                  title="时间轴视图"
-                >
-                  <GitCommit className="w-3.5 h-3.5" />
-                  <span>时间轴</span>
-                </button>
+                <div className="flex items-center space-x-1.5">
+                  {/* Select Mode Toggle */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsSelectMode(!isSelectMode);
+                      if (isSelectMode) setSelectedRecordIds(new Set());
+                    }}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-medium border flex items-center gap-1 transition-all ${
+                      isSelectMode
+                        ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                        : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
+                    }`}
+                    title="开启多选模式以挑选特定记录的官方文件打印"
+                  >
+                    <CheckSquare className="w-3.5 h-3.5" />
+                    <span>{isSelectMode ? '完成选择' : '批量选择'}</span>
+                  </button>
+
+                  {/* One-click Print All/Selected Official Files */}
+                  <button
+                    type="button"
+                    onClick={() => handleOpenBatchPrint()}
+                    className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white shadow-xs flex items-center gap-1 transition-all cursor-pointer"
+                    title="一键打印已上传的出差公函、上级通知等报账必备官方文件"
+                  >
+                    <Printer className="w-3.5 h-3.5 text-white" />
+                    <span>一键打印官方文件</span>
+                  </button>
+
+                  {/* Card / Timeline switcher */}
+                  <div className="flex items-center space-x-0.5 bg-white p-0.5 rounded-lg border border-slate-200 shadow-2xs">
+                    <button
+                      onClick={() => setViewMode('card')}
+                      className={`px-2 py-1 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${
+                        viewMode === 'card'
+                          ? 'bg-blue-600 text-white'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                      title="卡片列表视图"
+                    >
+                      <List className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => setViewMode('timeline')}
+                      className={`px-2 py-1 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${
+                        viewMode === 'timeline'
+                          ? 'bg-blue-600 text-white'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                      title="时间轴视图"
+                    >
+                      <GitCommit className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
               </div>
+
+              {/* Batch Selection Sticky Bar when select mode is active */}
+              {isSelectMode && (
+                <div className="p-2.5 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl flex items-center justify-between text-xs text-blue-900 shadow-xs animate-in fade-in">
+                  <div className="flex items-center space-x-2">
+                    <CheckSquare className="w-4 h-4 text-blue-600 shrink-0" />
+                    <div>
+                      <span className="font-bold">已选 {selectedRecordIds.size} 项记录</span>
+                      <span className="text-[11px] text-blue-700 ml-1.5">
+                        (含 {records.filter((r) => selectedRecordIds.has(r.id)).reduce((sum, r) => sum + (r.files?.length || 0), 0)} 份文件)
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center space-x-1.5">
+                    <button
+                      type="button"
+                      onClick={handleSelectAllRecordsWithFiles}
+                      className="px-2 py-1 bg-white hover:bg-blue-100 text-blue-700 rounded-md text-[11px] border border-blue-200 font-medium transition-colors"
+                    >
+                      全选有文件
+                    </button>
+                    {selectedRecordIds.size > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleDeselectAllRecords}
+                        className="px-2 py-1 bg-white hover:bg-slate-100 text-slate-600 rounded-md text-[11px] border border-slate-200 transition-colors"
+                      >
+                        清空
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleOpenBatchPrint()}
+                      className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-md text-[11px] font-bold shadow-xs flex items-center gap-1 transition-all cursor-pointer"
+                    >
+                      <Printer className="w-3.5 h-3.5" />
+                      <span>打印选中文件</span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Record List Container */}
@@ -667,6 +801,10 @@ export default function OutingApp() {
                       onEdit={handleEditRecord}
                       onDelete={handleRequestDelete}
                       onViewDetails={handleOpenDetail}
+                      isSelectMode={isSelectMode}
+                      isSelected={selectedRecordIds.has(rec.id)}
+                      onToggleSelect={handleToggleSelectRecord}
+                      onPrintFiles={handlePrintSingleRecordFiles}
                     />
                   ))}
                 </div>
@@ -677,6 +815,7 @@ export default function OutingApp() {
                     onViewApproval={handleOpenApproval}
                     onEdit={handleEditRecord}
                     onDelete={handleRequestDelete}
+                    onPrintFiles={handlePrintSingleRecordFiles}
                   />
                 </div>
               )
@@ -770,6 +909,7 @@ export default function OutingApp() {
           onOpenApproval={handleOpenApproval}
           onEdit={handleEditRecord}
           onDelete={handleRequestDelete}
+          onPrintFiles={handlePrintSingleRecordFiles}
         />
 
         {/* 4. In-App Delete Confirmation Modal (Iframe-Safe) */}
@@ -781,6 +921,14 @@ export default function OutingApp() {
           }}
           onConfirm={handleConfirmDelete}
           isDeleting={isDeleting}
+        />
+
+        {/* 5. Batch Print Uploaded Official Documents & Notices Modal */}
+        <BatchPrintFilesModal
+          isOpen={isBatchPrintOpen}
+          onClose={() => setIsBatchPrintOpen(false)}
+          records={records}
+          initialSelectedRecordIds={batchPrintInitialRecordIds}
         />
       </main>
     </div>
