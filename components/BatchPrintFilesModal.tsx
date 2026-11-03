@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
+import { getOfficialDocuments, getExcludedPhotosCount } from '@/lib/utils';
 
 export interface BatchPrintFilesModalProps {
   isOpen: boolean;
@@ -57,30 +58,46 @@ function BatchPrintFilesContent({
   onClose: () => void;
   initialSelectedRecordIds?: string[];
 }) {
-  // Only records that actually contain files
-  const recordsWithFiles = useMemo(() => {
-    return records.filter((r) => r.files && r.files.length > 0);
+  // Only records that actually contain official documents (excluding on-site photos)
+  const recordsWithOfficialDocs = useMemo(() => {
+    return records
+      .map((r) => ({
+        record: r,
+        officialFiles: getOfficialDocuments(r),
+        excludedPhotosCount: getExcludedPhotosCount(r),
+      }))
+      .filter((item) => item.officialFiles.length > 0);
   }, [records]);
 
-  // Selected file keys: Set of `recordId___fileId`
+  // Total count of excluded on-site photos across all records
+  const totalExcludedPhotosCount = useMemo(() => {
+    return records.reduce((acc, r) => acc + getExcludedPhotosCount(r), 0);
+  }, [records]);
+
+  // Total count of printable official documents
+  const totalOfficialDocsCount = useMemo(() => {
+    return recordsWithOfficialDocs.reduce((acc, item) => acc + item.officialFiles.length, 0);
+  }, [recordsWithOfficialDocs]);
+
+  // Selected file keys: Set of `recordId___fileId` (strictly official documents only)
   const [selectedFileKeys, setSelectedFileKeys] = useState<Set<string>>(() => {
     const set = new Set<string>();
     const targetRecordIds = initialSelectedRecordIds && initialSelectedRecordIds.length > 0
       ? new Set(initialSelectedRecordIds)
       : null;
 
-    recordsWithFiles.forEach((rec) => {
-      if (!targetRecordIds || targetRecordIds.has(rec.id)) {
-        rec.files.forEach((f) => {
-          set.add(`${rec.id}___${f.id}`);
+    recordsWithOfficialDocs.forEach(({ record, officialFiles }) => {
+      if (!targetRecordIds || targetRecordIds.has(record.id)) {
+        officialFiles.forEach((f) => {
+          set.add(`${record.id}___${f.id}`);
         });
       }
     });
 
-    // Fallback: if nothing selected, select files from the first record with files
-    if (set.size === 0 && recordsWithFiles.length > 0) {
-      recordsWithFiles[0].files.forEach((f) => {
-        set.add(`${recordsWithFiles[0].id}___${f.id}`);
+    // Fallback: if nothing selected, select official files from the first record with official files
+    if (set.size === 0 && recordsWithOfficialDocs.length > 0) {
+      recordsWithOfficialDocs[0].officialFiles.forEach((f) => {
+        set.add(`${recordsWithOfficialDocs[0].record.id}___${f.id}`);
       });
     }
 
@@ -97,11 +114,11 @@ function BatchPrintFilesContent({
   // References
   const printContainerRef = useRef<HTMLDivElement>(null);
 
-  // Flattened list of selected items with record metadata
+  // Flattened list of selected items with record metadata (strictly official files)
   const selectedItems = useMemo(() => {
     const list: { record: OutingRecord; file: FileAttachment; key: string }[] = [];
-    recordsWithFiles.forEach((record) => {
-      record.files.forEach((file) => {
+    recordsWithOfficialDocs.forEach(({ record, officialFiles }) => {
+      officialFiles.forEach((file) => {
         const key = `${record.id}___${file.id}`;
         if (selectedFileKeys.has(key)) {
           list.push({ record, file, key });
@@ -109,7 +126,7 @@ function BatchPrintFilesContent({
       });
     });
     return list;
-  }, [recordsWithFiles, selectedFileKeys]);
+  }, [recordsWithOfficialDocs, selectedFileKeys]);
 
   // Toggle single file
   const toggleFile = (key: string) => {
@@ -122,12 +139,12 @@ function BatchPrintFilesContent({
     setSelectedFileKeys(next);
   };
 
-  // Toggle all files in a record
-  const toggleRecordFiles = (record: OutingRecord) => {
+  // Toggle all official files in a record
+  const toggleRecordFiles = (record: OutingRecord, officialFiles: FileAttachment[]) => {
     const next = new Set(selectedFileKeys);
-    const allSelected = record.files.every((f) => next.has(`${record.id}___${f.id}`));
+    const allSelected = officialFiles.every((f) => next.has(`${record.id}___${f.id}`));
 
-    record.files.forEach((f) => {
+    officialFiles.forEach((f) => {
       const key = `${record.id}___${f.id}`;
       if (allSelected) {
         next.delete(key);
@@ -139,12 +156,12 @@ function BatchPrintFilesContent({
     setSelectedFileKeys(next);
   };
 
-  // Select all or deselect all
+  // Select all or deselect all official files
   const selectAllFiles = () => {
     const next = new Set<string>();
-    recordsWithFiles.forEach((r) => {
-      r.files.forEach((f) => {
-        next.add(`${r.id}___${f.id}`);
+    recordsWithOfficialDocs.forEach(({ record, officialFiles }) => {
+      officialFiles.forEach((f) => {
+        next.add(`${record.id}___${f.id}`);
       });
     });
     setSelectedFileKeys(next);
@@ -311,7 +328,7 @@ function BatchPrintFilesContent({
                 }`}
               >
                 <SlidersHorizontal className="w-3.5 h-3.5" />
-                <span>{showSidebar ? '收起清单' : '选择文件'}</span>
+                <span>{showSidebar ? '收起清单' : '选择公函'}</span>
               </button>
 
               <button
@@ -323,6 +340,21 @@ function BatchPrintFilesContent({
                 <X className="w-5 h-5" />
               </button>
             </div>
+          </div>
+
+          {/* Prompt banner: Strictly excludes on-site photos as requested for financial reimbursement */}
+          <div className="px-4 py-2 bg-gradient-to-r from-amber-50 via-emerald-50 to-blue-50 border-b border-amber-200/80 flex items-center justify-between text-xs text-slate-800 shrink-0">
+            <div className="flex items-center space-x-2">
+              <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span className="text-[11px] sm:text-xs">
+                <strong>财务报销规范已生效：</strong>本功能仅打印出差/培训<strong>官方公函通知与红头批件</strong>，已自动排除<strong>现场实拍照片</strong>（实拍照报账无需打印）。
+              </span>
+            </div>
+            {totalExcludedPhotosCount > 0 && (
+              <span className="text-[10px] text-emerald-800 bg-emerald-100/90 border border-emerald-300 px-2 py-0.5 rounded-full font-medium shrink-0 ml-2 hidden sm:inline-block">
+                已自动过滤 {totalExcludedPhotosCount} 张现场实拍照
+              </span>
+            )}
           </div>
 
           {/* Main Content Body: Left checklist + Right A4 preview */}
@@ -338,10 +370,10 @@ function BatchPrintFilesContent({
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
                     <Paperclip className="w-3.5 h-3.5 text-blue-600" />
-                    <span>待打印文件清单 ({selectedItems.length}/{recordsWithFiles.reduce((acc, r) => acc + r.files.length, 0)})</span>
+                    <span>待打印公函清单 ({selectedItems.length}/{totalOfficialDocsCount})</span>
                   </span>
                   <span className="text-[11px] text-slate-500">
-                    共 {recordsWithFiles.length} 笔记录有附件
+                    共 {recordsWithOfficialDocs.length} 笔记录有公函
                   </span>
                 </div>
 
@@ -351,7 +383,7 @@ function BatchPrintFilesContent({
                     onClick={selectAllFiles}
                     className="flex-1 py-1 px-2 rounded bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-medium text-center text-[11px] transition-colors"
                   >
-                    全选所有文件
+                    全选所有公函
                   </button>
                   <button
                     type="button"
@@ -365,14 +397,15 @@ function BatchPrintFilesContent({
 
               {/* Records and Files Tree */}
               <div className="flex-1 overflow-y-auto p-2.5 space-y-2.5 text-xs">
-                {recordsWithFiles.length === 0 ? (
+                {recordsWithOfficialDocs.length === 0 ? (
                   <div className="p-6 text-center text-slate-400">
                     <AlertCircle className="w-8 h-8 mx-auto mb-2 text-slate-300" />
-                    <p>当前记录中暂未检测到已上传的官方公函文件</p>
+                    <p className="text-xs font-semibold text-slate-600 mb-1">暂无待打印的官方公函文件</p>
+                    <p className="text-[11px] text-slate-400">系统已自动过滤所有现场实拍照片；未检测到上级公函通知附件。</p>
                   </div>
                 ) : (
-                  recordsWithFiles.map((record) => {
-                    const recordFileKeys = record.files.map((f) => `${record.id}___${f.id}`);
+                  recordsWithOfficialDocs.map(({ record, officialFiles, excludedPhotosCount }) => {
+                    const recordFileKeys = officialFiles.map((f) => `${record.id}___${f.id}`);
                     const selectedCount = recordFileKeys.filter((k) => selectedFileKeys.has(k)).length;
                     const allSelected = selectedCount === recordFileKeys.length && recordFileKeys.length > 0;
                     const partiallySelected = selectedCount > 0 && selectedCount < recordFileKeys.length;
@@ -388,7 +421,7 @@ function BatchPrintFilesContent({
                       >
                         {/* Record Head */}
                         <div
-                          onClick={() => toggleRecordFiles(record)}
+                          onClick={() => toggleRecordFiles(record, officialFiles)}
                           className="flex items-start space-x-2 cursor-pointer pb-2 border-b border-slate-200/70"
                         >
                           <button
@@ -415,17 +448,22 @@ function BatchPrintFilesContent({
                                 {record.applicantName}
                               </span>
                             </div>
-                            <div className="text-[10px] text-slate-500 flex items-center gap-1 mt-0.5">
+                            <div className="text-[10px] text-slate-500 flex items-center flex-wrap gap-1 mt-0.5">
                               <span>{record.destinations?.join(' ➔ ') || '出差'}</span>
                               <span>·</span>
-                              <span>{record.files.length} 份文件</span>
+                              <span className="text-blue-700 font-medium">{officialFiles.length} 份官方公函</span>
+                              {excludedPhotosCount > 0 && (
+                                <span className="text-emerald-700 bg-emerald-50 px-1 rounded border border-emerald-200/60 text-[9px]">
+                                  已滤{excludedPhotosCount}张照片
+                                </span>
+                              )}
                             </div>
                           </div>
                         </div>
 
-                        {/* File Items in this record */}
+                        {/* Official File Items in this record */}
                         <div className="pt-2 space-y-1.5 pl-6">
-                          {record.files.map((file) => {
+                          {officialFiles.map((file) => {
                             const key = `${record.id}___${file.id}`;
                             const isChecked = selectedFileKeys.has(key);
 
@@ -528,7 +566,7 @@ function BatchPrintFilesContent({
                         {/* Top Watermark or Stamp */}
                         {showWatermark && (
                           <div className="absolute right-8 top-8 pointer-events-none opacity-20 border-2 border-red-600 text-red-600 rounded px-2.5 py-1 text-xs font-serif font-bold rotate-12 uppercase tracking-widest">
-                            财务报销·装订附单
+                            财务报销·公函批件附单
                           </div>
                         )}
 
@@ -536,9 +574,14 @@ function BatchPrintFilesContent({
                         {showFinanceHeader && (
                           <div className="pb-4 mb-4 border-b-2 border-slate-900 text-xs">
                             <div className="flex items-center justify-between pb-1 text-slate-600">
-                              <span className="font-bold text-slate-800 tracking-wider">
-                                【公务外出与培训报销凭据附件】
-                              </span>
+                              <div className="flex items-center">
+                                <span className="font-bold text-slate-800 tracking-wider">
+                                  【公务外出与培训报销凭据附件 · 官方通知与批件】
+                                </span>
+                                <span className="text-[10px] text-emerald-800 bg-emerald-100 border border-emerald-300 px-1.5 py-0.5 rounded ml-2 font-normal">
+                                  已自动排除现场实拍照
+                                </span>
+                              </div>
                               <span className="font-mono text-[11px]">
                                 第 {index + 1} 页 / 共 {selectedItems.length} 页
                               </span>
@@ -663,7 +706,7 @@ function BatchPrintFilesContent({
                             <span>上传于：{file.uploadedAt || formatDate(record.createdAt)}</span>
                           </div>
                           <div className="font-mono text-[10px] text-slate-400">
-                            审批单号: {record.id} · A4 标准装订附单
+                            审批单号: {record.id} · A4 标准装订公函附单 · 现场照片无需报销打印
                           </div>
                         </div>
                       </div>
@@ -679,7 +722,7 @@ function BatchPrintFilesContent({
             <div className="flex items-center space-x-2 text-xs text-slate-600">
               <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
               <span>
-                已选中 <strong>{selectedItems.length}</strong> 份官方文件 · 可直接批量打印或导出为多页 PDF
+                已选中 <strong>{selectedItems.length}</strong> 份官方公函批件 · 现场实拍照已自动排除 · 可一键批量打印或导出多页 PDF
               </span>
             </div>
 

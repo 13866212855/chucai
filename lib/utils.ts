@@ -64,8 +64,67 @@ export function toChineseCurrency(money: number | undefined | null): string {
     }
   }
 
+
   intResult += '元';
 
   return (isNegative ? '欠' : '') + intResult + decResult;
+}
+
+import type { FileAttachment, OutingRecord } from '@/types/outing';
+
+/**
+ * 判断文件是否为报销打印所需的“官方文件/批复通知公函”，严格排除“现场照片/实拍照/打卡照”
+ */
+export function isOfficialDocumentFile(file: FileAttachment): boolean {
+  if (!file || !file.name) return false;
+  const name = file.name.toLowerCase();
+
+  // 现场照片、实拍照、打卡照关键词黑名单
+  const photoKeywords = [
+    '现场照片',
+    '现场',
+    '实拍',
+    '照片',
+    '拍照',
+    '打卡',
+    '留影',
+    '合影',
+    '活动照',
+    '工作照',
+    '开会照',
+    'photo',
+    'scene',
+    'onsite',
+    'camera',
+    'img_',
+    'dcim',
+  ];
+
+  for (const kw of photoKeywords) {
+    if (name.includes(kw)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * 获取外出记录中供财务报账一键打印的官方公函通知文件
+ * 严格只从 files 中提取官方通知公函，绝对排除 photos（现场照片）以及含现场照片标识的附件
+ */
+export function getOfficialDocuments(record?: OutingRecord | null): FileAttachment[] {
+  if (!record || !record.files || !Array.isArray(record.files)) return [];
+  return record.files.filter(isOfficialDocumentFile);
+}
+
+/**
+ * 获取当前记录中被过滤排除的现场照片总数（包含 record.photos 以及 files 中属于现场拍照的附件）
+ */
+export function getExcludedPhotosCount(record?: OutingRecord | null): number {
+  if (!record) return 0;
+  const directPhotos = record.photos?.length || 0;
+  const filePhotos = (record.files || []).filter((f) => !isOfficialDocumentFile(f)).length;
+  return directPhotos + filePhotos;
 }
 

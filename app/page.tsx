@@ -45,6 +45,7 @@ import {
   Square,
   Paperclip,
 } from 'lucide-react';
+import { getOfficialDocuments, getExcludedPhotosCount } from '@/lib/utils';
 
 const emptySubscribe = () => () => {};
 
@@ -349,8 +350,8 @@ export default function OutingApp() {
   };
 
   const handleSelectAllRecordsWithFiles = () => {
-    const withFiles = filteredRecords.filter((r) => r.files && r.files.length > 0);
-    setSelectedRecordIds(new Set(withFiles.map((r) => r.id)));
+    const withDocs = filteredRecords.filter((r) => getOfficialDocuments(r).length > 0);
+    setSelectedRecordIds(new Set(withDocs.map((r) => r.id)));
   };
 
   const handleDeselectAllRecords = () => {
@@ -362,10 +363,10 @@ export default function OutingApp() {
       ? targetIds
       : Array.from(selectedRecordIds);
 
-    // If nothing selected, default to all records with files
+    // If nothing selected, default to all records with official docs (excluding onsite photos)
     if (ids.length === 0) {
-      const allWithFiles = records.filter((r) => r.files && r.files.length > 0).map((r) => r.id);
-      setBatchPrintInitialRecordIds(allWithFiles);
+      const allWithDocs = records.filter((r) => getOfficialDocuments(r).length > 0).map((r) => r.id);
+      setBatchPrintInitialRecordIds(allWithDocs);
     } else {
       setBatchPrintInitialRecordIds(ids);
     }
@@ -679,7 +680,7 @@ export default function OutingApp() {
                   </span>
                   <span className="text-slate-300">·</span>
                   <span className="text-[11px] text-blue-700 font-medium">
-                    {records.reduce((acc, r) => acc + (r.files?.length || 0), 0)} 份官方文件
+                    {records.reduce((acc, r) => acc + getOfficialDocuments(r).length, 0)} 份官方公函
                   </span>
                 </div>
 
@@ -707,7 +708,7 @@ export default function OutingApp() {
                     type="button"
                     onClick={() => handleOpenBatchPrint()}
                     className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white shadow-xs flex items-center gap-1 transition-all cursor-pointer"
-                    title="一键打印已上传的出差公函、上级通知等报账必备官方文件"
+                    title="一键打印已上传的出差公函、上级通知等报账必备官方文件（已自动排除现场实拍照）"
                   >
                     <Printer className="w-3.5 h-3.5 text-white" />
                     <span>一键打印官方文件</span>
@@ -749,7 +750,7 @@ export default function OutingApp() {
                     <div>
                       <span className="font-bold">已选 {selectedRecordIds.size} 项记录</span>
                       <span className="text-[11px] text-blue-700 ml-1.5">
-                        (含 {records.filter((r) => selectedRecordIds.has(r.id)).reduce((sum, r) => sum + (r.files?.length || 0), 0)} 份文件)
+                        (含 {records.filter((r) => selectedRecordIds.has(r.id)).reduce((sum, r) => sum + getOfficialDocuments(r).length, 0)} 份官方公函，已排除现场照)
                       </span>
                     </div>
                   </div>
@@ -760,7 +761,7 @@ export default function OutingApp() {
                       onClick={handleSelectAllRecordsWithFiles}
                       className="px-2 py-1 bg-white hover:bg-blue-100 text-blue-700 rounded-md text-[11px] border border-blue-200 font-medium transition-colors"
                     >
-                      全选有文件
+                      全选有公函
                     </button>
                     {selectedRecordIds.size > 0 && (
                       <button
@@ -777,7 +778,7 @@ export default function OutingApp() {
                       className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-md text-[11px] font-bold shadow-xs flex items-center gap-1 transition-all cursor-pointer"
                     >
                       <Printer className="w-3.5 h-3.5" />
-                      <span>打印选中文件</span>
+                      <span>打印选中公函</span>
                     </button>
                   </div>
                 </div>

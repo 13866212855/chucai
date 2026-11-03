@@ -17,6 +17,7 @@ import {
   CheckSquare,
   Square,
 } from 'lucide-react';
+import { getOfficialDocuments } from '@/lib/utils';
 
 interface RecordCardProps {
   record: OutingRecord;
@@ -69,7 +70,8 @@ export function RecordCard({
     return `${month}-${day} ${hours}:${mins}`;
   };
 
-  const fileCount = record.files?.length || 0;
+  const officialDocs = getOfficialDocuments(record);
+  const officialDocCount = officialDocs.length;
   const photoCount = record.photos?.length || 0;
 
   return (
@@ -117,7 +119,7 @@ export function RecordCard({
         </div>
 
         <div className="flex items-center space-x-1.5 shrink-0">
-          {fileCount > 0 && !isSelectMode && (
+          {officialDocCount > 0 && !isSelectMode && (
             <span className="text-[10px] text-blue-700 bg-blue-50 border border-blue-200/60 px-1.5 py-0.5 rounded font-medium">
               含官方公函
             </span>
@@ -184,13 +186,13 @@ export function RecordCard({
       </div>
 
       {/* Attachments & Photos badges */}
-      {(fileCount > 0 || photoCount > 0 || record.notes) && (
+      {(officialDocCount > 0 || photoCount > 0 || record.notes) && (
         <div className="flex items-center flex-wrap gap-2 text-[11px] text-slate-500 mb-2.5 pt-1">
-          {fileCount > 0 && (
+          {officialDocCount > 0 && (
             <div className="inline-flex items-center gap-1.5">
               <span className="inline-flex items-center gap-1 text-slate-700 bg-slate-100 px-2 py-0.5 rounded border border-slate-200/60 font-medium">
                 <Paperclip className="w-3 h-3 text-blue-600" />
-                <span>{fileCount} 份文件</span>
+                <span>{officialDocCount} 份官方公函</span>
               </span>
               {onPrintFiles && (
                 <button
@@ -200,18 +202,21 @@ export function RecordCard({
                     onPrintFiles(record);
                   }}
                   className="inline-flex items-center gap-1 text-[11px] text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200/80 px-2 py-0.5 rounded transition-colors font-medium active:scale-95"
-                  title="一键打印此记录已上传的官方公函文件"
+                  title="一键打印此记录已上传的官方公函通知（现场照片自动排除）"
                 >
                   <Printer className="w-3 h-3 text-emerald-600" />
-                  <span>打印文件</span>
+                  <span>打印公函</span>
                 </button>
               )}
             </div>
           )}
           {photoCount > 0 && (
-            <span className="inline-flex items-center gap-1 text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
+            <span
+              className="inline-flex items-center gap-1 text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200/60"
+              title="活动现场照片（仅日常备查，报销打印已自动剔除）"
+            >
               <Camera className="w-3 h-3 text-indigo-600" />
-              <span>{photoCount} 张现场照</span>
+              <span>{photoCount} 张现场照(免打)</span>
             </span>
           )}
           {record.notes && (

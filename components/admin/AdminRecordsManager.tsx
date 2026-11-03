@@ -449,7 +449,7 @@ export function AdminRecordsManager({
                   setIsBatchPrintOpen(true);
                 }}
                 className="flex items-center space-x-1 px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-2xs transition-colors cursor-pointer"
-                title="一键打印选中记录已上传的官方红头文件与批件"
+                title="一键打印选中记录已上传的官方红头文件与批件（现场实拍照已自动排除）"
               >
                 <Printer className="w-3.5 h-3.5" />
                 <span>打印选中官方文件</span>

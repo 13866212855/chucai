@@ -1185,6 +1185,9 @@ function RecordFormContent({
                   <span className="text-xs font-bold text-slate-800">
                     通知文件 / 批复函件
                   </span>
+                  <span className="text-[10px] text-blue-700 bg-blue-100/70 border border-blue-200 px-1.5 py-0.5 rounded font-medium">
+                    财务报账打印专用
+                  </span>
                 </div>
                 <div className="flex items-center space-x-1 bg-emerald-50 text-emerald-700 border border-emerald-200/80 px-2 py-0.5 rounded-full text-[10px] font-medium">
                   <WeChatIcon className="w-3 h-3 text-emerald-600" />
@@ -1249,10 +1252,10 @@ function RecordFormContent({
                         <span>可从<strong>微信聊天记录</strong>中直接将文件拖拽到此窗口，亦支持复制后 Ctrl+V 粘贴</span>
                       </p>
                       <div className="flex items-center gap-1 pt-1 text-[10px] text-slate-400">
-                        <span className="bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">PDF</span>
-                        <span className="bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">Word</span>
+                        <span className="bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">PDF通知</span>
+                        <span className="bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">红头批件</span>
                         <span className="bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">公函图片</span>
-                        <span className="bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">Excel/ZIP</span>
+                        <span className="bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">Word任务书</span>
                       </div>
                     </>
                   )}
@@ -1263,7 +1266,8 @@ function RecordFormContent({
               {files.length > 0 && (
                 <div className="mt-2.5 space-y-1.5">
                   <div className="flex items-center justify-between text-[11px] text-slate-500 px-1">
-                    <span>已上传文件 ({files.length})</span>
+                    <span>已上传官方公函/通知文件 ({files.length})</span>
+                    <span className="text-[10px] text-emerald-700">后续支持一键打印到 A4 纸</span>
                   </div>
                   {files.map((file) => (
                     <div
@@ -1297,7 +1301,10 @@ function RecordFormContent({
                 <div className="flex items-center space-x-1.5">
                   <Camera className="w-4 h-4 text-indigo-600" />
                   <span className="text-xs font-bold text-slate-800">
-                    现场照片（多张上传）
+                    活动现场照片（多张上传）
+                  </span>
+                  <span className="text-[10px] text-slate-500 bg-slate-200/80 px-1.5 py-0.5 rounded font-normal">
+                    日常留存备查 · 报销免打印
                   </span>
                 </div>
                 <div className="flex items-center space-x-1 bg-emerald-50 text-emerald-700 border border-emerald-200/80 px-2 py-0.5 rounded-full text-[10px] font-medium">
