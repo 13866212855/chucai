@@ -30,6 +30,9 @@ const nextConfig: NextConfig = {
         ignored: /.*/,
       };
     }
+    config.resolve = config.resolve || {};
+    config.resolve.alias = config.resolve.alias || {};
+    config.resolve.alias.canvas = false;
     return config;
   },
 };

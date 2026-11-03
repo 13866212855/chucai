@@ -24,6 +24,7 @@ import {
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { getOfficialDocuments, getExcludedPhotosCount } from '@/lib/utils';
+import { OriginalFileRenderItem } from './OriginalFileRenderItem';
 
 export interface BatchPrintFilesModalProps {
   isOpen: boolean;
@@ -306,13 +307,13 @@ function BatchPrintFilesContent({
               </div>
               <div>
                 <div className="flex items-center space-x-2">
-                  <h2 className="text-sm font-bold tracking-tight">一键打印已上传官方文件与批件</h2>
+                  <h2 className="text-sm font-bold tracking-tight">一键打印已上传官方文件与批件（原版呈现）</h2>
                   <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 px-2 py-0.5 rounded-full font-medium">
                     财务报账专用
                   </span>
                 </div>
                 <p className="text-[11px] text-slate-300">
-                  支持按需勾选未报账出差的红头批件、培训通知公函，一键打印为标准 A4 装订附单
+                  真实完整呈现您所上传的原始红头公函、通知与批件（PDF/Word/图片等），原汁原味还原原貌打印
                 </p>
               </div>
             </div>
@@ -550,168 +551,17 @@ function BatchPrintFilesContent({
                   ref={printContainerRef}
                   className="w-full max-w-[210mm] space-y-6"
                 >
-                  {selectedItems.map((item, index) => {
-                    const { record, file } = item;
-                    const isImage =
-                      file.type.startsWith('image/') ||
-                      /\.(jpe?g|png|webp|bmp|gif)$/i.test(file.name) ||
-                      (file.dataUrl && file.dataUrl.startsWith('data:image/'));
-
-                    return (
-                      <div
-                        key={item.key}
-                        className="official-doc-page bg-white rounded-lg shadow-md border border-slate-300 p-6 sm:p-8 min-h-[297mm] flex flex-col justify-between text-slate-900 relative"
-                        style={{ boxSizing: 'border-box' }}
-                      >
-                        {/* Top Watermark or Stamp */}
-                        {showWatermark && (
-                          <div className="absolute right-8 top-8 pointer-events-none opacity-20 border-2 border-red-600 text-red-600 rounded px-2.5 py-1 text-xs font-serif font-bold rotate-12 uppercase tracking-widest">
-                            财务报销·公函批件附单
-                          </div>
-                        )}
-
-                        {/* Top Official Header (Audit Banner) */}
-                        {showFinanceHeader && (
-                          <div className="pb-4 mb-4 border-b-2 border-slate-900 text-xs">
-                            <div className="flex items-center justify-between pb-1 text-slate-600">
-                              <div className="flex items-center">
-                                <span className="font-bold text-slate-800 tracking-wider">
-                                  【公务外出与培训报销凭据附件 · 官方通知与批件】
-                                </span>
-                                <span className="text-[10px] text-emerald-800 bg-emerald-100 border border-emerald-300 px-1.5 py-0.5 rounded ml-2 font-normal">
-                                  已自动排除现场实拍照
-                                </span>
-                              </div>
-                              <span className="font-mono text-[11px]">
-                                第 {index + 1} 页 / 共 {selectedItems.length} 页
-                              </span>
-                            </div>
-
-                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 text-[11px] text-slate-700 bg-slate-50 p-2.5 rounded border border-slate-200">
-                              <div>
-                                <span className="text-slate-400">报销事项：</span>
-                                <strong className="text-slate-900 block truncate">{record.title}</strong>
-                              </div>
-                              <div>
-                                <span className="text-slate-400">出差人员：</span>
-                                <strong className="text-slate-900 block truncate">
-                                  {record.applicantName}（{record.department || '中心'}）
-                                </strong>
-                              </div>
-                              <div>
-                                <span className="text-slate-400">行程路线：</span>
-                                <strong className="text-slate-900 block truncate">
-                                  {record.destinations?.join(' ➔ ') || '外出地'}
-                                </strong>
-                              </div>
-                              <div>
-                                <span className="text-slate-400">外出时间：</span>
-                                <span className="text-slate-900 block font-mono text-[10px]">
-                                  {record.startTime ? record.startTime.slice(0, 10) : ''} 至{' '}
-                                  {record.endTime ? record.endTime.slice(0, 10) : ''}（{Math.max(1, Math.round(record.durationDays || 1))}天）
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Document Content Area */}
-                        <div className="flex-1 flex flex-col items-center justify-center py-2">
-                          {isImage && file.dataUrl ? (
-                            <div className="w-full flex flex-col items-center">
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img
-                                src={file.dataUrl}
-                                alt={file.name}
-                                className="max-w-full max-h-[750px] object-contain border border-slate-200 rounded shadow-2xs"
-                              />
-                            </div>
-                          ) : (
-                            /* Authentic Official Red-Headed Document Template for Non-Image or Seed Files */
-                            <div className="w-full border border-slate-300 p-6 sm:p-8 bg-white font-serif text-slate-900 space-y-4">
-                              {/* Red Head */}
-                              <div className="text-center pb-3 border-b-2 border-red-600">
-                                <h1 className="text-xl sm:text-2xl font-black text-red-600 tracking-wider">
-                                  阜阳市教育局 / 相关主管部门 文件
-                                </h1>
-                                <p className="text-xs text-red-600 font-mono mt-1">
-                                  阜教发〔2026〕{10 + index} 号
-                                </p>
-                              </div>
-
-                              {/* Red Star Separator */}
-                              <div className="flex items-center justify-center text-red-600 text-xs">
-                                ★ ★ ★
-                              </div>
-
-                              {/* Document Title */}
-                              <h2 className="text-base sm:text-lg font-bold text-center text-slate-900 leading-snug pt-2">
-                                关于开展《{record.title}》的通知公函
-                              </h2>
-
-                              {/* Content Body */}
-                              <div className="text-xs sm:text-sm leading-relaxed space-y-3 pt-2 text-justify indent-6">
-                                <p>
-                                  各相关直属单位、学校、教研室及有关人员：
-                                </p>
-                                <p>
-                                  为切实保障业务工作顺利开展与专业能力提升，经研究决定，组织安排{' '}
-                                  <span className="font-bold underline decoration-slate-400 underline-offset-4">
-                                    {record.applicantName}
-                                  </span>{' '}
-                                  同志于{' '}
-                                  <span className="font-mono font-bold">
-                                    {record.startTime ? record.startTime.slice(0, 10) : '2026-09-29'}
-                                  </span>{' '}
-                                  至{' '}
-                                  <span className="font-mono font-bold">
-                                    {record.endTime ? record.endTime.slice(0, 10) : '2026-09-29'}
-                                  </span>{' '}
-                                  前往{' '}
-                                  <span className="font-bold underline decoration-slate-400 underline-offset-4">
-                                    {record.destinations?.join('、') || '阜阳四中'}
-                                  </span>{' '}
-                                  参加“{record.title}”，行程计{' '}
-                                  <span className="font-bold">{Math.max(1, Math.round(record.durationDays || 1))}</span> 天。
-                                </p>
-                                <p>
-                                  请严格按照中央八项规定精神及机关差旅费管理办法执行，活动结束后凭本通知、公务出差审批单及合法票据按程序办理财务报销。
-                                </p>
-                              </div>
-
-                              {/* Sign & Date */}
-                              <div className="pt-8 text-right space-y-1">
-                                <p className="font-bold">主管部门业务科室（代章）</p>
-                                <p className="font-mono text-xs">
-                                  {record.startTime ? record.startTime.slice(0, 10) : '2026-09-29'}
-                                </p>
-                              </div>
-
-                              {/* Official Document Footer */}
-                              <div className="pt-6 border-t border-slate-300 text-[11px] text-slate-500 flex justify-between">
-                                <span>随附原始文件：{file.name}</span>
-                                <span>印发份数：抄送报销联</span>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Sheet Bottom Footer */}
-                        <div className="pt-4 mt-4 border-t border-slate-300 flex items-center justify-between text-[11px] text-slate-500 font-sans">
-                          <div className="flex items-center space-x-2">
-                            <span className="font-medium text-slate-700">
-                              原件名称：{file.name}
-                            </span>
-                            <span>·</span>
-                            <span>上传于：{file.uploadedAt || formatDate(record.createdAt)}</span>
-                          </div>
-                          <div className="font-mono text-[10px] text-slate-400">
-                            审批单号: {record.id} · A4 标准装订公函附单 · 现场照片无需报销打印
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
+                  {selectedItems.map((item, index) => (
+                    <OriginalFileRenderItem
+                      key={item.key}
+                      record={item.record}
+                      file={item.file}
+                      showFinanceHeader={showFinanceHeader}
+                      showWatermark={showWatermark}
+                      pageIndex={index}
+                      totalPages={selectedItems.length}
+                    />
+                  ))}
                 </div>
               )}
             </div>
