@@ -19,7 +19,6 @@ const nextConfig: NextConfig = {
       },
     ],
   },
-  output: 'standalone',
   serverExternalPackages: ['sql.js'],
   transpilePackages: ['motion'],
   webpack: (config, {dev}) => {

@@ -27,7 +27,7 @@ echo [3/4] Starting new container...
 if not exist "%DATA_DIR%" ( mkdir "%DATA_DIR%" )
 
 :: 启动容器
-docker run -d --name chucai -p 7860:3000 -v "%DATA_DIR%:/app/data" --restart unless-stopped chucai:latest
+docker run -d --name chucai -p 7860:3000 -e HOSTNAME=0.0.0.0 -e PORT=3000 -v "%DATA_DIR%:/app/data" --restart unless-stopped chucai:latest
 
 if errorlevel 1 (
     echo [ERROR] Failed to start Docker container.
@@ -49,10 +49,17 @@ docker image prune -f >nul 2>&1
 echo Done.
 echo.
 
-echo [验证] 等待 3 秒后检查容器运行状态...
-timeout /t 3 /nobreak >nul
-docker ps | findstr chucai
+echo [验证] 等待 4 秒后检查容器运行状态...
+timeout /t 4 /nobreak >nul
+docker ps -f name=chucai
 echo.
+
+for /f "tokens=*" %%i in ('docker ps -q -f name^=chucai -f status^=running') do set "RUNNING_ID=%%i"
+if not defined RUNNING_ID (
+    echo [提示] 容器未处于 Running 状态，正在打印容器实时日志排查：
+    docker logs chucai --tail 25
+    echo.
+)
 
 echo ========================================
 echo Deployment Successful!
