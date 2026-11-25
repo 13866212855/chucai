@@ -30,7 +30,9 @@ import {
   Wand2,
   AlertCircle,
   Undo2,
+  ExternalLink,
 } from 'lucide-react';
+import { extractPdfForInference, compressImageDataUrl } from '@/lib/pdfClient';
 
 interface RecordFormModalProps {
   isOpen: boolean;
@@ -298,6 +300,8 @@ function RecordFormContent({
   const [isInferring, setIsInferring] = useState(false);
   const [inferenceResult, setInferenceResult] = useState<InferredResult | null>(null);
   const [inferenceError, setInferenceError] = useState<string | null>(null);
+  const [inferenceWarning, setInferenceWarning] = useState<string | null>(null);
+  const [inferenceSource, setInferenceSource] = useState<'llm' | 'local_fallback' | null>(null);
   const [preInferenceSnapshot, setPreInferenceSnapshot] = useState<InferenceSnapshot | null>(null);
   const [hasManualEdit, setHasManualEdit] = useState(false);
 
@@ -545,11 +549,13 @@ function RecordFormContent({
     setNotes(preInferenceSnapshot.notes);
     persistCurrentForm(preInferenceSnapshot);
     setInferenceResult(null);
+    setInferenceWarning(null);
+    setInferenceSource(null);
     setPreInferenceSnapshot(null);
     showUploadFeedback('已撤销本次智能填充，恢复原有填写内容');
   };
 
-  // Run AI inference on uploaded documents + historical records
+  // Run AI inference on uploaded documents + historical records using backend-configured LLM
   const runSmartInference = async (targetFiles: FileAttachment[]) => {
     if (!targetFiles || targetFiles.length === 0) {
       setInferenceError('请先上传至少一份通知文件、公函或截图');
@@ -558,15 +564,28 @@ function RecordFormContent({
 
     setIsInferring(true);
     setInferenceError(null);
+    setInferenceWarning(null);
+    setInferenceSource(null);
 
     try {
-      // Prepare payloads; extract text from .docx on client using mammoth if applicable
+      // Prepare lightweight payloads on client to prevent oversized requests or server HTML 413/502 errors
       const preparedFiles = await Promise.all(
         targetFiles.slice(0, 4).map(async (f) => {
           const lowerName = (f.name || '').toLowerCase();
+          const lowerType = (f.type || '').toLowerCase();
+
           const isDocx =
             lowerName.endsWith('.docx') ||
-            (f.type && f.type.includes('wordprocessingml'));
+            lowerType.includes('wordprocessingml');
+          const isPdf =
+            lowerName.endsWith('.pdf') ||
+            lowerType.includes('pdf');
+          const isImage =
+            lowerType.startsWith('image/') ||
+            /\.(png|jpe?g|webp|gif|bmp)$/.test(lowerName);
+          const isText =
+            lowerType.startsWith('text/') ||
+            /\.(txt|md|csv)$/.test(lowerName);
 
           if (isDocx && f.dataUrl) {
             try {
@@ -588,10 +607,55 @@ function RecordFormContent({
             }
           }
 
+          if (isPdf && f.dataUrl) {
+            try {
+              const { extractedText, pageImages } = await extractPdfForInference(f.dataUrl);
+              return {
+                name: f.name,
+                type: f.type,
+                extractedText,
+                pageImages,
+              };
+            } catch (e) {
+              console.warn('Client PDF extraction failed, sending filename only:', e);
+            }
+          }
+
+          if (isImage && f.dataUrl) {
+            try {
+              const compressed = await compressImageDataUrl(f.dataUrl);
+              return {
+                name: f.name,
+                type: f.type,
+                imageDataUrl: compressed,
+              };
+            } catch (e) {
+              console.warn('Image compression failed:', e);
+            }
+          }
+
+          if (isText && f.dataUrl) {
+            try {
+              const base64Part = f.dataUrl.includes(',') ? f.dataUrl.split(',')[1] : f.dataUrl;
+              const binaryStr = atob(base64Part);
+              const bytes = new Uint8Array(binaryStr.length);
+              for (let i = 0; i < binaryStr.length; i++) {
+                bytes[i] = binaryStr.charCodeAt(i);
+              }
+              const decoded = new TextDecoder('utf-8').decode(bytes);
+              return {
+                name: f.name,
+                type: f.type,
+                extractedText: decoded.slice(0, 12000),
+              };
+            } catch (e) {
+              console.warn('Text decoding failed:', e);
+            }
+          }
+
           return {
             name: f.name,
             type: f.type,
-            dataUrl: f.dataUrl,
           };
         })
       );
@@ -619,13 +683,39 @@ function RecordFormContent({
         }),
       });
 
-      const data = await res.json();
-      if (!res.ok || !data.success || !data.data) {
-        throw new Error(data.error || '智能识别失败，请重试');
+      const rawText = await res.text();
+      let data: any = null;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        const trimmed = rawText.trim();
+        if (trimmed.startsWith('<')) {
+          throw new Error(
+            `服务器返回了非 JSON 页面（HTTP ${res.status}，可能接口尚未更新或请求体过大），请刷新页面或重新部署后重试`
+          );
+        }
+        throw new Error(`接口返回格式异常（HTTP ${res.status}）`);
+      }
+
+      if (!res.ok || !data?.success || !data?.data) {
+        throw new Error(data?.error || `智能识别失败（HTTP ${res.status}），请重试`);
+      }
+
+      if (data.source === 'local_fallback') {
+        setInferenceSource('local_fallback');
+        if (data.llmError) {
+          setInferenceWarning(data.llmError);
+        }
+        showUploadFeedback('后台大模型接口受限，已自动启用本地规则与历史记录完成智能回填！');
+      } else {
+        setInferenceSource('llm');
+        setInferenceWarning(null);
+        showUploadFeedback(
+          `已通过后台大模型 (${data.model || '默认模型'}) 结合历史记录完成智能回填！`
+        );
       }
 
       applyInferredValues(data.data);
-      showUploadFeedback('已根据上传文件与历史记录智能推断并填写默认内容！');
     } catch (err: any) {
       console.error('Smart inference failed:', err);
       setInferenceError(err?.message || '智能识别失败，请检查文件后重试或手动填写');
@@ -1208,22 +1298,44 @@ function RecordFormContent({
               {/* Inferred Result Banner */}
               {inferenceResult && !isInferring && (
                 <div className="mt-2 bg-white/95 border border-emerald-200 rounded-lg p-2.5 text-[11px] space-y-1.5 shadow-2xs">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-emerald-800 flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                      已智能填充行程与时间预算
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-bold text-emerald-800 flex items-center gap-1 flex-wrap">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span>已智能填充行程与时间预算</span>
+                      {inferenceSource === 'local_fallback' && (
+                        <span className="text-[10px] font-medium bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">
+                          本地规则兜底
+                        </span>
+                      )}
                     </span>
                     {preInferenceSnapshot && (
                       <button
                         type="button"
                         onClick={handleUndoInference}
-                        className="text-slate-500 hover:text-slate-800 flex items-center gap-0.5 underline"
+                        className="text-slate-500 hover:text-slate-800 flex items-center gap-0.5 underline shrink-0"
                       >
                         <Undo2 className="w-3 h-3" />
                         <span>撤销填充</span>
                       </button>
                     )}
                   </div>
+                  {inferenceWarning && (
+                    <div className="bg-amber-50 border border-amber-200 rounded px-2 py-1.5 text-[10px] text-amber-900 flex items-start justify-between gap-2">
+                      <span>
+                        <strong>后台模型调用受限：</strong>
+                        {inferenceWarning}
+                      </span>
+                      <a
+                        href="/admin"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="shrink-0 text-blue-700 hover:text-blue-900 underline font-semibold flex items-center gap-0.5"
+                      >
+                        <span>去后台更换</span>
+                        <ExternalLink className="w-2.5 h-2.5" />
+                      </a>
+                    </div>
+                  )}
                   <p className="text-slate-600 leading-relaxed">{inferenceResult.reasoning}</p>
                   <div className="flex flex-wrap gap-1.5 pt-0.5 text-[10px]">
                     <span className="bg-blue-50 text-blue-800 px-1.5 py-0.5 rounded border border-blue-200/80">
@@ -1756,13 +1868,18 @@ function RecordFormContent({
                     )}
 
                     {inferenceResult && !isInferring && (
-                      <div className="bg-white/95 border border-emerald-200 rounded p-2 text-[11px] space-y-1">
-                        <div className="flex items-center justify-between">
-                          <span className="font-semibold text-emerald-800 flex items-center gap-1">
-                            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                            已同步推断：{inferenceResult.title}
+                      <div className="bg-white/95 border border-emerald-200 rounded p-2 text-[11px] space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold text-emerald-800 flex items-center gap-1 flex-wrap">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" />
+                            <span>已同步推断：{inferenceResult.title}</span>
+                            {inferenceSource === 'local_fallback' && (
+                              <span className="text-[10px] font-medium bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">
+                                本地规则兜底
+                              </span>
+                            )}
                           </span>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 shrink-0">
                             <button
                               type="button"
                               onClick={() => goToStep(1)}
@@ -1781,6 +1898,23 @@ function RecordFormContent({
                             )}
                           </div>
                         </div>
+                        {inferenceWarning && (
+                          <div className="bg-amber-50 border border-amber-200 rounded px-2 py-1 text-[10px] text-amber-900 flex items-start justify-between gap-2">
+                            <span>
+                              <strong>后台模型调用受限：</strong>
+                              {inferenceWarning}
+                            </span>
+                            <a
+                              href="/admin"
+                              target="_blank"
+                              rel="noreferrer"
+                              className="shrink-0 text-blue-700 hover:text-blue-900 underline font-semibold flex items-center gap-0.5"
+                            >
+                              <span>去后台更换</span>
+                              <ExternalLink className="w-2.5 h-2.5" />
+                            </a>
+                          </div>
+                        )}
                         <p className="text-[10px] text-slate-600">
                           路线：{inferenceResult.destinations.join(' → ')} ｜ 时间：{inferenceResult.startTime.replace('T', ' ')} ~ {inferenceResult.endTime.slice(11, 16)}（{inferenceResult.durationDays}天）
                         </p>

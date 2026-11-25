@@ -37,9 +37,49 @@ export function AdminLLMManager() {
 
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
   const [saveSuccessTip, setSaveSuccessTip] = useState<string | null>(null);
   const [saveErrorTip, setSaveErrorTip] = useState<string | null>(null);
   const [showApiKey, setShowApiKey] = useState(false);
+
+  const PROVIDER_PRESETS = [
+    {
+      label: 'DeepSeek',
+      baseUrl: 'https://api.deepseek.com/v1',
+      textModel: 'deepseek-chat',
+      imageModel: 'dall-e-3',
+    },
+    {
+      label: '通义千问 (阿里云)',
+      baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      textModel: 'qwen-plus',
+      imageModel: 'wanx2.1-t2i-turbo',
+    },
+    {
+      label: '硅基流动 SiliconFlow',
+      baseUrl: 'https://api.siliconflow.cn/v1',
+      textModel: 'Qwen/Qwen2.5-72B-Instruct',
+      imageModel: 'black-forest-labs/FLUX.1-schnell',
+    },
+    {
+      label: '智谱 GLM',
+      baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+      textModel: 'glm-4-flash',
+      imageModel: 'cogview-3-flash',
+    },
+    {
+      label: 'OpenAI 官方',
+      baseUrl: 'https://api.openai.com/v1',
+      textModel: 'gpt-4o-mini',
+      imageModel: 'dall-e-3',
+    },
+    {
+      label: 'ApiHub Agnes',
+      baseUrl: 'https://apihub.agnes-ai.com/v1',
+      textModel: 'Agnes-2.5-flash',
+      imageModel: 'Agnes-Image-2.1-flash',
+    },
+  ];
 
   // Text Model Test State
   const [textPrompt, setTextPrompt] = useState(
@@ -122,12 +162,15 @@ export function AdminLLMManager() {
     }
   };
 
-  // Reset to Defaults
+  // Reset to Defaults (inline two-step confirm without window.confirm)
   const handleResetDefaults = async () => {
-    if (!confirm('确定将大模型参数重置为系统默认预设（Agnes-2.5-flash / Agnes-Image-2.1-flash）吗？')) {
+    if (!confirmReset) {
+      setConfirmReset(true);
+      setTimeout(() => setConfirmReset(false), 4000);
       return;
     }
 
+    setConfirmReset(false);
     setIsSaving(true);
     try {
       const res = await fetch('/api/admin/llm/settings', {
@@ -138,10 +181,10 @@ export function AdminLLMManager() {
       const data = await res.json();
       if (data.success && data.data) {
         setSettings(data.data);
-        setSaveSuccessTip('已恢复为官方默认参数！');
+        setSaveSuccessTip('已恢复为系统默认参数！');
         setTimeout(() => setSaveSuccessTip(null), 3000);
       }
-    } catch (err) {
+    } catch {
       setSaveErrorTip('重置默认参数失败');
     } finally {
       setIsSaving(false);
@@ -163,8 +206,18 @@ export function AdminLLMManager() {
           customConfig: settings,
         }),
       });
-      const result = await res.json();
-      setTextTestResult(result);
+      const rawText = await res.text();
+      try {
+        const result = JSON.parse(rawText);
+        setTextTestResult(result);
+      } catch {
+        setTextTestResult({
+          success: false,
+          model: settings.textModel,
+          error: `接口返回非 JSON 内容 (HTTP ${res.status}): ${rawText.slice(0, 180)}`,
+          latencyMs: 0,
+        });
+      }
     } catch (err: any) {
       setTextTestResult({
         success: false,
@@ -192,8 +245,19 @@ export function AdminLLMManager() {
           customConfig: settings,
         }),
       });
-      const result = await res.json();
-      setImageTestResult(result);
+      const rawText = await res.text();
+      try {
+        const result = JSON.parse(rawText);
+        setImageTestResult(result);
+      } catch {
+        setImageTestResult({
+          success: false,
+          model: settings.imageModel,
+          prompt: imagePrompt,
+          error: `接口返回非 JSON 内容 (HTTP ${res.status}): ${rawText.slice(0, 180)}`,
+          latencyMs: 0,
+        });
+      }
     } catch (err: any) {
       setImageTestResult({
         success: false,
@@ -227,10 +291,10 @@ export function AdminLLMManager() {
             </div>
             <div>
               <h2 className="text-sm sm:text-base font-bold text-white">
-                大模型接口与核心参数配置 (ApiHub Agnes)
+                大模型接口与核心参数配置（前台智能填表同步使用此模型）
               </h2>
               <p className="text-[11px] text-slate-300">
-                支持动态修改端点、密钥与模型名称，实时持久化存储并即时生效
+                支持任何 OpenAI 兼容协议接口（DeepSeek / 通义千问 / 硅基流动 / 智谱 / ApiHub Agnes 等），保存后即时生效
               </p>
             </div>
           </div>
@@ -239,14 +303,56 @@ export function AdminLLMManager() {
             type="button"
             onClick={handleResetDefaults}
             disabled={isSaving}
-            className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-medium transition-colors cursor-pointer"
+            className={`flex items-center space-x-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+              confirmReset
+                ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                : 'bg-white/10 hover:bg-white/20 text-white'
+            }`}
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            <span>恢复默认值</span>
+            <span>{confirmReset ? '再次点击确认重置' : '恢复默认值'}</span>
           </button>
         </div>
 
         <form onSubmit={handleSaveSettings} className="p-5 space-y-4 text-xs">
+          {/* Upstream Default Key Notice & Quick Provider Presets */}
+          <div className="p-3 bg-amber-50/90 border border-amber-200 rounded-xl text-amber-900 space-y-2">
+            <div className="flex items-start gap-2">
+              <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div className="text-[11px] leading-relaxed">
+                <strong>接口说明：</strong>
+                若测试默认 <code className="bg-amber-100 px-1 rounded">sk-vWM7...</code> 密钥出现{' '}
+                <code className="bg-amber-100 px-1 rounded">HTTP 403 (unusual activity)</code>
+                ，表示该公共试用密钥已被 AgnesAI 上游风控限制，请在下方一键切换服务商并填入您自己的 API Key 后点击「保存大模型参数配置」。
+                <span className="text-amber-700">
+                  （注：即使暂未更换可用密钥，前台“一键智能回填”也会自动启用本地规则 + 历史记录兜底填表。）
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center flex-wrap gap-1.5 pt-1 border-t border-amber-200/70">
+              <span className="text-[11px] font-semibold text-amber-800 mr-1">常用服务商快速预设:</span>
+              {PROVIDER_PRESETS.map((preset) => (
+                <button
+                  key={preset.label}
+                  type="button"
+                  onClick={() => {
+                    setSettings((prev) => ({
+                      ...prev,
+                      baseUrl: preset.baseUrl,
+                      textModel: preset.textModel,
+                      imageModel: preset.imageModel,
+                    }));
+                    setSaveSuccessTip(`已套用「${preset.label}」接口地址与模型名，请填写对应的 API Key 后保存。`);
+                    setTimeout(() => setSaveSuccessTip(null), 4000);
+                  }}
+                  className="px-2 py-0.5 rounded bg-white hover:bg-amber-100 text-amber-900 border border-amber-300/80 text-[11px] font-medium transition-colors cursor-pointer"
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {saveSuccessTip && (
             <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl flex items-center space-x-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -545,7 +651,7 @@ export function AdminLLMManager() {
                       {textTestResult.response}
                     </div>
                   ) : (
-                    <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-rose-800 text-xs font-mono">
+                    <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-rose-800 text-xs font-mono whitespace-pre-wrap break-words leading-relaxed">
                       {textTestResult.error}
                     </div>
                   )}
@@ -685,7 +791,7 @@ export function AdminLLMManager() {
                       />
                     </div>
                   ) : (
-                    <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-rose-800 text-xs font-mono">
+                    <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-rose-800 text-xs font-mono whitespace-pre-wrap break-words leading-relaxed">
                       {imageTestResult.error}
                     </div>
                   )}

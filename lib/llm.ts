@@ -115,10 +115,18 @@ export async function testTextModel(
 
     if (!res.ok) {
       const errText = await res.text();
+      let hint = '';
+      if (res.status === 403 && errText.includes('unusual activity')) {
+        hint = '\n\n💡 诊断提示：当前预设的 ApiHub Agnes 默认体验密钥已被上游平台风控临时限制（403）。请在上方更换为您自己的 API 接口地址与密钥（如 DeepSeek、通义千问、硅基流动或新的 Agnes Key）并点击“保存大模型参数配置”即可恢复正常。';
+      } else if (res.status === 401) {
+        hint = '\n\n💡 诊断提示：API Key 无效或已过期（401），请检查密钥是否填写正确。';
+      } else if (res.status === 404) {
+        hint = '\n\n💡 诊断提示：接口地址或模型名称不存在（404），请确认 Base URL 末尾是否包含 /v1 以及模型名称是否正确。';
+      }
       return {
         success: false,
         model,
-        error: `HTTP ${res.status}: ${errText.slice(0, 500)}`,
+        error: `HTTP ${res.status}: ${errText.slice(0, 500)}${hint}`,
         latencyMs,
       };
     }
@@ -185,11 +193,17 @@ export async function testImageModel(
 
     if (!res.ok) {
       const errText = await res.text();
+      let hint = '';
+      if (res.status === 403 && errText.includes('unusual activity')) {
+        hint = '\n\n💡 诊断提示：当前预设的 ApiHub Agnes 默认体验密钥已被上游平台风控临时限制（403），请在上方更换您自己的 API 密钥后保存重试。';
+      } else if (res.status === 401) {
+        hint = '\n\n💡 诊断提示：API Key 无效或已过期（401），请检查密钥配置。';
+      }
       return {
         success: false,
         model,
         prompt,
-        error: `HTTP ${res.status}: ${errText.slice(0, 500)}`,
+        error: `HTTP ${res.status}: ${errText.slice(0, 500)}${hint}`,
         latencyMs,
       };
     }

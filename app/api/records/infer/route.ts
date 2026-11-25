@@ -1,136 +1,129 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
 import { getAllRecords } from '@/lib/db';
+import { getLLMSettings } from '@/lib/settings';
+import { inferLocallyFromTextAndHistory, HistoryContextItem } from '@/lib/localInfer';
 
 interface InferFilePayload {
   name: string;
   type: string;
-  dataUrl?: string;
   extractedText?: string;
+  pageImages?: string[];
+  imageDataUrl?: string;
 }
 
 interface InferRequestBody {
   files: InferFilePayload[];
-  historyRecords?: Array<{
-    applicantName?: string;
-    department?: string;
-    activityType?: string;
-    title?: string;
-    destinations?: string[];
-    startTime?: string;
-    endTime?: string;
-    durationDays?: number;
-    budget?: number;
-    budgetBreakdown?: {
-      transport?: number;
-      accommodation?: number;
-      meals?: number;
-      other?: number;
-    };
-    notes?: string;
-  }>;
+  historyRecords?: HistoryContextItem[];
 }
 
-const INFER_RESPONSE_SCHEMA = {
-  type: Type.OBJECT,
-  properties: {
-    activityType: {
-      type: Type.STRING,
-      description: '活动类型，必须是 "出差"、"学习培训"、"其他" 之一。',
-    },
-    title: {
-      type: Type.STRING,
-      description: '活动主题或主要事由，简明扼要，符合公文/出差报销单填写规范。',
-    },
-    departure: {
-      type: Type.STRING,
-      description: '出发地名称，优先沿用历史记录中的常用出发地（如“耿棚”）。',
-    },
-    destination: {
-      type: Type.STRING,
-      description: '主要目的地名称，优先从上传的通知/文件中提取精确地点（如“颍上县青少年活动中心蒲公英剧场”或具体单位/城市）。',
-    },
-    waypoints: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-      description: '途经站点列表，若无途经站点则为空数组。',
-    },
-    startTime: {
-      type: Type.STRING,
-      description: '出发或活动开始时间，必须严格使用 YYYY-MM-DDTHH:mm 格式（例如 2026-11-25T08:00）。',
-    },
-    endTime: {
-      type: Type.STRING,
-      description: '返回或活动结束时间，必须严格使用 YYYY-MM-DDTHH:mm 格式（例如 2026-11-25T11:40）。',
-    },
-    durationDays: {
-      type: Type.INTEGER,
-      description: '外出总天数，必须是大于等于 1 的正整数，当天往返为 1。',
-    },
-    budgetBreakdown: {
-      type: Type.OBJECT,
-      properties: {
-        transport: { type: Type.NUMBER, description: '城际交通费预估（元）' },
-        accommodation: { type: Type.NUMBER, description: '住宿费预估（元），当天往返通常为 0' },
-        meals: { type: Type.NUMBER, description: '餐饮/伙食补助预估（元）' },
-        other: { type: Type.NUMBER, description: '其他杂费预估（元）' },
-      },
-      required: ['transport', 'accommodation', 'meals', 'other'],
-    },
-    applicantName: {
-      type: Type.STRING,
-      description: '申请人姓名，优先沿用历史记录常用姓名；若文件中明确指定了参会/出差个人则提取该姓名。',
-    },
-    department: {
-      type: Type.STRING,
-      description: '所属部门，优先沿用历史记录中的常用部门；若文件中明确指定则提取。',
-    },
-    notes: {
-      type: Type.STRING,
-      description: '补充备注说明，汇总通知文号、报到签到时间、联系人及电话等关键辅助信息。',
-    },
-    reasoning: {
-      type: Type.STRING,
-      description: '用1-2句中文说明本次智能推断的依据（例如识别了哪份通知的时间地点、参考了历史记录中的出发地与预算标准）。',
-    },
-  },
-  required: [
-    'activityType',
-    'title',
-    'departure',
-    'destination',
-    'waypoints',
-    'startTime',
-    'endTime',
-    'durationDays',
-    'budgetBreakdown',
-    'applicantName',
-    'department',
-    'notes',
-    'reasoning',
-  ],
-};
+function extractJsonFromText(raw: string): any {
+  const trimmed = (raw || '').trim();
+  if (!trimmed) throw new Error('模型返回内容为空');
 
-function parseDataUrl(dataUrl: string): { mimeType: string; data: string } | null {
-  if (!dataUrl || typeof dataUrl !== 'string') return null;
-  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
-  if (!match) return null;
-  return { mimeType: match[1], data: match[2] };
+  // Try direct parse first
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    // Strip markdown ```json ... ``` fences
+    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fenced && fenced[1]) {
+      return JSON.parse(fenced[1].trim());
+    }
+    // Extract first {...} block
+    const start = trimmed.indexOf('{');
+    const end = trimmed.lastIndexOf('}');
+    if (start !== -1 && end > start) {
+      return JSON.parse(trimmed.slice(start, end + 1));
+    }
+    throw new Error('模型输出未能解析为有效 JSON');
+  }
+}
+
+function formatUpstreamError(status: number, errText: string): string {
+  if (status === 403 && errText.includes('unusual activity')) {
+    return `HTTP 403：默认 Agnes 密钥已被上游服务临时限制，请前往「管理后台 -> 大模型参数与测试」更换可用的 API Key。`;
+  }
+  if (status === 401) {
+    return `HTTP 401：API Key 无效或未授权，请在「管理后台 -> 大模型参数与测试」检查配置。`;
+  }
+  return `HTTP ${status}: ${errText.slice(0, 260)}`;
+}
+
+async function callOpenAICompatibleLLM(
+  baseUrl: string,
+  apiKey: string,
+  model: string,
+  temperature: number,
+  systemPrompt: string,
+  userTextPrompt: string,
+  imageUrls: string[]
+): Promise<string> {
+  const endpoint = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
+
+  const makeRequest = async (useImages: boolean, useJsonMode: boolean) => {
+    const userContent: any =
+      useImages && imageUrls.length > 0
+        ? [
+            { type: 'text', text: userTextPrompt },
+            ...imageUrls.slice(0, 3).map((url) => ({
+              type: 'image_url',
+              image_url: { url },
+            })),
+          ]
+        : userTextPrompt;
+
+    const payload: Record<string, any> = {
+      model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userContent },
+      ],
+      temperature: typeof temperature === 'number' ? temperature : 0.3,
+    };
+
+    if (useJsonMode) {
+      payload.response_format = { type: 'json_object' };
+    }
+
+    return fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(payload),
+    });
+  };
+
+  // Attempt 1: with images (if any) + json_object mode
+  let res = await makeRequest(imageUrls.length > 0, true);
+
+  // If rejected due to response_format or image_url incompatibility (400/422), retry gracefully
+  if (!res.ok && (res.status === 400 || res.status === 422)) {
+    const firstErr = await res.text();
+    const hasImageIssue = imageUrls.length > 0 && /image|vision|multimodal|content/i.test(firstErr);
+    res = await makeRequest(!hasImageIssue && imageUrls.length > 0, false);
+    if (!res.ok && (res.status === 400 || res.status === 422) && imageUrls.length > 0) {
+      // Pure text-only final retry
+      res = await makeRequest(false, false);
+    }
+  }
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(formatUpstreamError(res.status, errText));
+  }
+
+  const data = await res.json();
+  const content = data?.choices?.[0]?.message?.content;
+  if (!content) {
+    throw new Error('大模型返回内容为空');
+  }
+  return content;
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
-      return NextResponse.json(
-        {
-          success: false,
-          error: '未检测到有效的 GEMINI_API_KEY，请在 AI Studio 的 Settings > Secrets 面板中配置后重试。',
-        },
-        { status: 500 }
-      );
-    }
-
     const body = (await req.json()) as InferRequestBody;
     const files = Array.isArray(body?.files) ? body.files : [];
 
@@ -141,8 +134,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Fetch historical records from SQLite as ground truth context
-    let dbHistory: any[] = [];
+    // Load historical records from SQLite
+    let dbHistory: HistoryContextItem[] = [];
     try {
       const allRecords = await getAllRecords();
       dbHistory = allRecords.slice(0, 15).map((r) => ({
@@ -165,175 +158,166 @@ export async function POST(req: NextRequest) {
     const clientHistory = Array.isArray(body?.historyRecords) ? body.historyRecords.slice(0, 10) : [];
     const mergedHistory = dbHistory.length > 0 ? dbHistory : clientHistory;
 
-    const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [];
+    // Collect text and images from uploaded files
+    const docTextBlocks: string[] = [];
+    const imageUrls: string[] = [];
 
-    // Attach uploaded document contents
     for (const file of files.slice(0, 4)) {
+      docTextBlocks.push(`【文件名】${file.name}`);
       if (file.extractedText && file.extractedText.trim()) {
-        parts.push({
-          text: `【上传文档内容 - ${file.name}】\n${file.extractedText.slice(0, 20000)}`,
-        });
-        continue;
+        docTextBlocks.push(`【文件内容】\n${file.extractedText.slice(0, 12000)}`);
       }
-
-      if (file.dataUrl) {
-        const parsed = parseDataUrl(file.dataUrl);
-        if (parsed) {
-          const supportedInline =
-            parsed.mimeType === 'application/pdf' ||
-            parsed.mimeType.startsWith('image/');
-
-          if (supportedInline) {
-            parts.push({
-              text: `【上传文件：${file.name} (${parsed.mimeType})】`,
-            });
-            parts.push({
-              inlineData: {
-                mimeType: parsed.mimeType,
-                data: parsed.data,
-              },
-            });
-            continue;
-          }
-
-          if (parsed.mimeType.startsWith('text/')) {
-            try {
-              const decoded = Buffer.from(parsed.data, 'base64').toString('utf8');
-              parts.push({
-                text: `【上传文本文件 - ${file.name}】\n${decoded.slice(0, 20000)}`,
-              });
-              continue;
-            } catch {
-              // ignore decode error
-            }
+      if (Array.isArray(file.pageImages)) {
+        for (const img of file.pageImages.slice(0, 2)) {
+          if (img && img.startsWith('data:image/')) {
+            imageUrls.push(img);
           }
         }
       }
-
-      parts.push({
-        text: `【上传文件名参考】${file.name}`,
-      });
+      if (file.imageDataUrl && file.imageDataUrl.startsWith('data:image/')) {
+        imageUrls.push(file.imageDataUrl);
+      }
     }
 
+    const settings = getLLMSettings();
     const todayStr = new Date().toISOString().slice(0, 10);
-    const promptText = `你是一位经验丰富的行政与财务报账智能助手。请仔细阅读上面用户本次上传的通知公函、截图或文档，并结合用户过往历史外出记录，智能推断出新建外出事务表单最合理的默认填写内容。
+
+    const systemInstruction = `${settings.systemPrompt || '你是一个专业的企业行政与外出事务管理AI助手。'}
+请严格按照 JSON 格式返回推断结果，不要输出额外解释性文字。`;
+
+    const userPrompt = `请仔细分析本次上传的通知文件/纪要/图片，并结合用户历史外出记录，智能推断新建外出事务表单最合理的默认填写内容。
 
 当前日期：${todayStr}
+
+【上传文档与文件信息】：
+${docTextBlocks.join('\n\n')}
 
 【用户历史外出记录参考（按最近时间排序）】：
 ${JSON.stringify(mergedHistory, null, 2)}
 
-【严格推断规则】：
-1. **活动类型 (activityType)**：只能从 "出差"、"学习培训"、"其他" 中三选一。若通知/文件涉及培训、研修、教研、讲座、学习等，优先选 "学习培训"；若涉及会议、验收、考察、汇报、调研等公务出行，选 "出差"。
-2. **活动主题/主要事由 (title)**：从通知标题或正文提炼简洁标准的填写内容（如“参加2026年“智慧徽师成长计划”系列培训”或去掉“关于开展……的通知”外壳后的核心事由）。
-3. **路线与地点 (departure, destination, waypoints)**：
-   - **departure（出发地）**：优先沿用历史记录中最常使用的出发地（例如历史记录中的 "耿棚"），除非文件明确指出从别处集中出发。
-   - **destination（目的地）**：必须精准提取本次上传文件中给出的会议/培训/出差具体地点（如“颍上县青少年活动中心蒲公英剧场”或具体城市/学校/机构名）。
-4. **时间与天数 (startTime, endTime, durationDays)**：
-   - 仔细阅读文件中的会议/培训日期、签到时间与结束时间，严格输出为 \`YYYY-MM-DDTHH:mm\` 格式。
-   - 若文件写有签到时间（例如“2026年11月25日8:30-11:40（8:00-8:25签到）”），\`startTime\` 可设为 \`2026-11-25T08:00\`（或合理提前至签到时间），\`endTime\` 设为 \`2026-11-25T11:40\`。
-   - 若文件只有日期没有具体时刻，开始默认 \`08:30\`，结束默认 \`17:30\`。
-   - **durationDays** 必须是 >= 1 的整数（当天往返就是 1 天，跨天按自然日差+1或整天计，绝不能有小数）。
-5. **差旅费用预算 (budgetBreakdown)**：
-   - 优先参考历史记录中**相同或相近目的地、相同天数、相同活动类型**的费用标准进行推断。
-   - 若为本地/同县当日往返（\`durationDays === 1\`），\`accommodation\`（住宿费）应合理推断为 \`0\`；若历史记录中有单日交通费、伙食补助标准（例如单日伙食补助 50 元，同城/县内交通 50~100 元），请结合历史习惯给出合理预算数值。
-   - 若上传文件本身是车票、住宿发票或包含明确费用金额，直接提取该实际金额。
-6. **申请人与部门 (applicantName, department)**：
-   - 默认沿用历史记录中最新的申请人姓名与部门；若文件中（如回执名单/点名通知）明确写出了具体参会个人姓名或部门，可酌情采纳，否则保持历史常用值。
-7. **补充备注 (notes)**：
-   - 提取文件文号（如“颖教电函〔2026〕13号”）、签到要求、联系人及电话等实用备忘信息。
+【严格输出 JSON 字段要求】：
+请仅返回一个合法 JSON 对象，必须包含以下字段：
+{
+  "activityType": "必须是 '出差'、'学习培训'、'其他' 之一（含培训/研修/教研/学习选'学习培训'，会议/考察/验收/报送选'出差'）",
+  "title": "活动主题或主要事由，例如：参加2026年“智慧徽师成长计划”系列培训",
+  "departure": "出发地，优先沿用历史记录常用出发地（如 '耿棚'）",
+  "destination": "主要目的地/具体场所，优先提取文件中的精确地点（如 '颍上县青少年活动中心蒲公英剧场'）",
+  "waypoints": ["途经站点，无则为空数组 []"],
+  "startTime": "出发/开始时间，严格格式 YYYY-MM-DDTHH:mm（若有签到时间则取签到时间如 2026-11-25T08:00；仅有日期默认 08:30）",
+  "endTime": "返回/结束时间，严格格式 YYYY-MM-DDTHH:mm（仅有日期默认 17:30）",
+  "durationDays": 1,
+  "budgetBreakdown": {
+    "transport": 0,
+    "accommodation": 0,
+    "meals": 0,
+    "other": 0
+  },
+  "applicantName": "申请人姓名（优先沿用历史常用值，若文件指定参会人则提取）",
+  "department": "所属部门（优先沿用历史常用值）",
+  "notes": "补充说明（提取文号、签到要求、联系人及电话等关键信息）",
+  "reasoning": "用1-2句中文简述本次推断依据"
+}
 
-请以合法 JSON 返回推断结果。`;
+特别注意：
+1. durationDays 必须是大于等于 1 的正整数（当天往返为 1，绝对不能出现小数）。
+2. budgetBreakdown 请结合历史相同/相近目的地与天数的标准进行估算，当天往返住宿费 accommodation 应为 0。`;
 
-    parts.push({ text: promptText });
+    // Call backend-configured LLM (OpenAI-compatible endpoint from /admin)
+    try {
+      if (!settings.baseUrl || !settings.apiKey || !settings.textModel) {
+        throw new Error('后台大模型参数未完整配置，请前往管理后台配置接口地址、密钥与模型名称。');
+      }
 
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-4-hydrogen',
-      contents: { parts },
-      config: {
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-        responseMimeType: 'application/json',
-        responseSchema: INFER_RESPONSE_SCHEMA,
-      },
-    });
-
-    const rawText = (response.text || '').trim();
-    if (!rawText) {
-      return NextResponse.json(
-        { success: false, error: 'AI 模型未返回有效的识别内容，请重试。' },
-        { status: 502 }
+      const rawReply = await callOpenAICompatibleLLM(
+        settings.baseUrl,
+        settings.apiKey,
+        settings.textModel,
+        Math.min(settings.temperature ?? 0.3, 0.5),
+        systemInstruction,
+        userPrompt,
+        imageUrls
       );
-    }
 
-    const inferred = JSON.parse(rawText);
+      const inferred = extractJsonFromText(rawReply);
 
-    // Normalize & validate fields safely
-    const validTypes = ['出差', '学习培训', '其他'];
-    const activityType = validTypes.includes(inferred.activityType) ? inferred.activityType : '出差';
-    const durationDays = Math.max(1, Math.round(Number(inferred.durationDays) || 1));
+      const validTypes = ['出差', '学习培训', '其他'];
+      const activityType = validTypes.includes(inferred.activityType) ? inferred.activityType : '出差';
+      const durationDays = Math.max(1, Math.round(Number(inferred.durationDays) || 1));
 
-    const destinations: string[] = [];
-    if (inferred.departure && String(inferred.departure).trim()) {
-      destinations.push(String(inferred.departure).trim());
-    } else if (mergedHistory[0]?.destinations?.[0]) {
-      destinations.push(mergedHistory[0].destinations[0]);
-    } else {
-      destinations.push('耿棚');
-    }
+      const destinations: string[] = [];
+      if (inferred.departure && String(inferred.departure).trim()) {
+        destinations.push(String(inferred.departure).trim());
+      } else if (mergedHistory[0]?.destinations?.[0]) {
+        destinations.push(mergedHistory[0].destinations[0]);
+      } else {
+        destinations.push('耿棚');
+      }
 
-    if (Array.isArray(inferred.waypoints)) {
-      for (const wp of inferred.waypoints) {
-        const trimmed = String(wp || '').trim();
-        if (trimmed && !destinations.includes(trimmed)) {
-          destinations.push(trimmed);
+      if (Array.isArray(inferred.waypoints)) {
+        for (const wp of inferred.waypoints) {
+          const t = String(wp || '').trim();
+          if (t && !destinations.includes(t)) destinations.push(t);
         }
       }
-    }
 
-    if (inferred.destination && String(inferred.destination).trim()) {
-      const destTrimmed = String(inferred.destination).trim();
-      if (destinations[destinations.length - 1] !== destTrimmed) {
-        destinations.push(destTrimmed);
+      if (inferred.destination && String(inferred.destination).trim()) {
+        const dest = String(inferred.destination).trim();
+        if (destinations[destinations.length - 1] !== dest) {
+          destinations.push(dest);
+        }
+      } else if (destinations.length < 2) {
+        destinations.push(
+          mergedHistory[0]?.destinations?.[mergedHistory[0]?.destinations?.length - 1] || '颍上'
+        );
       }
-    } else if (destinations.length < 2) {
-      destinations.push(mergedHistory[0]?.destinations?.[mergedHistory[0]?.destinations?.length - 1] || '颍上');
+
+      return NextResponse.json({
+        success: true,
+        source: 'llm',
+        model: settings.textModel,
+        data: {
+          activityType,
+          title: String(inferred.title || '').trim(),
+          destinations,
+          startTime: String(inferred.startTime || '').trim(),
+          endTime: String(inferred.endTime || '').trim(),
+          durationDays,
+          budgetBreakdown: {
+            transport: Math.max(0, Number(inferred.budgetBreakdown?.transport) || 0),
+            accommodation: Math.max(0, Number(inferred.budgetBreakdown?.accommodation) || 0),
+            meals: Math.max(0, Number(inferred.budgetBreakdown?.meals) || 0),
+            other: Math.max(0, Number(inferred.budgetBreakdown?.other) || 0),
+          },
+          applicantName: String(inferred.applicantName || mergedHistory[0]?.applicantName || '张伟').trim(),
+          department: String(inferred.department || mergedHistory[0]?.department || '技术研发中心').trim(),
+          notes: String(inferred.notes || '').trim(),
+          reasoning: String(
+            inferred.reasoning || `已通过后台配置大模型 (${settings.textModel}) 结合历史记录完成智能推断`
+          ).trim(),
+        },
+      });
+    } catch (llmErr: any) {
+      const llmErrorMsg = llmErr?.message || '后台大模型请求失败';
+      console.warn('Configured LLM failed, falling back to local heuristic + history:', llmErrorMsg);
+
+      const fallback = inferLocallyFromTextAndHistory(
+        files.map((f) => ({ name: f.name, extractedText: f.extractedText })),
+        mergedHistory
+      );
+
+      return NextResponse.json({
+        success: true,
+        source: 'local_fallback',
+        model: settings.textModel,
+        llmError: llmErrorMsg,
+        data: fallback,
+      });
     }
-
-    const normalized = {
-      activityType,
-      title: String(inferred.title || '').trim(),
-      destinations,
-      startTime: String(inferred.startTime || '').trim(),
-      endTime: String(inferred.endTime || '').trim(),
-      durationDays,
-      budgetBreakdown: {
-        transport: Math.max(0, Number(inferred.budgetBreakdown?.transport) || 0),
-        accommodation: Math.max(0, Number(inferred.budgetBreakdown?.accommodation) || 0),
-        meals: Math.max(0, Number(inferred.budgetBreakdown?.meals) || 0),
-        other: Math.max(0, Number(inferred.budgetBreakdown?.other) || 0),
-      },
-      applicantName: String(inferred.applicantName || '').trim(),
-      department: String(inferred.department || '').trim(),
-      notes: String(inferred.notes || '').trim(),
-      reasoning: String(inferred.reasoning || '已结合上传文件与历史记录自动推断表单内容').trim(),
-    };
-
-    return NextResponse.json({ success: true, data: normalized });
   } catch (error: any) {
-    console.error('Error inferring outing details from uploaded files:', error);
-    const msg = error?.message || '智能识别文件失败，请检查网络或文件格式后重试';
+    console.error('Error in /api/records/infer:', error);
     return NextResponse.json(
-      { success: false, error: msg },
-      { status: error?.status || 500 }
+      { success: false, error: error?.message || '解析上传文件失败，请重试' },
+      { status: 500 }
     );
   }
 }

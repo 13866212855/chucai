@@ -12,10 +12,10 @@ export interface LLMSettings {
 }
 
 export const DEFAULT_LLM_SETTINGS: LLMSettings = {
-  baseUrl: 'https://apihub.agnes-ai.com/v1',
-  apiKey: 'sk-vWM7RHG5n7bljBNi3GgHfygxqiKlUYrPWZLLSUByIGm4BiM9',
-  textModel: 'Agnes-2.5-flash',
-  imageModel: 'Agnes-Image-2.1-flash',
+  baseUrl: process.env.OPENAI_BASE_URL || 'https://apihub.agnes-ai.com/v1',
+  apiKey: process.env.OPENAI_API_KEY || 'sk-vWM7RHG5n7bljBNi3GgHfygxqiKlUYrPWZLLSUByIGm4BiM9',
+  textModel: process.env.OPENAI_TEXT_MODEL || 'Agnes-2.5-flash',
+  imageModel: process.env.OPENAI_IMAGE_MODEL || 'Agnes-Image-2.1-flash',
   temperature: 0.7,
   systemPrompt: '你是一个专业的企业行政与外出事务管理AI助手，能够高效协助审核、总结外出行程及预算合理性。',
   updatedAt: new Date().toISOString(),
