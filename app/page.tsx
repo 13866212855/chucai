@@ -892,6 +892,7 @@ export default function OutingApp() {
           onSave={handleSaveRecord}
           initialData={formInitialData}
           latestRecord={records.length > 0 ? records[0] : null}
+          historyRecords={records}
           onAutoSaveDraft={handleAutoSaveDraft}
         />
 

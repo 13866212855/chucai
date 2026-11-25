@@ -19,7 +19,7 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
+import { safeHtml2Canvas } from '@/lib/safeHtml2Canvas';
 import { toChineseCurrency } from '@/lib/utils';
 
 interface ApprovalSlipModalProps {
@@ -168,7 +168,7 @@ function ApprovalSlipContent({
       for (let i = 0; i < sheetsToRender.length; i++) {
         const item = sheetsToRender[i];
         if (item.ref.current) {
-          const canvas = await html2canvas(item.ref.current, {
+          const canvas = await safeHtml2Canvas(item.ref.current, {
             scale: 2,
             useCORS: true,
             backgroundColor: '#ffffff',

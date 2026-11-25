@@ -26,6 +26,10 @@ import {
   RotateCcw,
   Sparkles,
   Paperclip,
+  Loader2,
+  Wand2,
+  AlertCircle,
+  Undo2,
 } from 'lucide-react';
 
 interface RecordFormModalProps {
@@ -34,6 +38,7 @@ interface RecordFormModalProps {
   onSave: (recordData: Partial<OutingRecord>) => Promise<void>;
   initialData?: OutingRecord | null;
   latestRecord?: OutingRecord | null;
+  historyRecords?: OutingRecord[];
   onAutoSaveDraft?: (draftData: Partial<OutingRecord>) => void;
 }
 
@@ -231,18 +236,48 @@ function WeChatIcon({ className = 'w-3.5 h-3.5' }: { className?: string }) {
   );
 }
 
+// Snapshot for undoing AI auto-fill
+interface InferenceSnapshot {
+  applicantName: string;
+  department: string;
+  activityType: ActivityType;
+  title: string;
+  destinations: string[];
+  startTime: string;
+  endTime: string;
+  durationDays: number;
+  budgetBreakdown: BudgetBreakdown;
+  notes: string;
+}
+
+interface InferredResult {
+  activityType: ActivityType;
+  title: string;
+  destinations: string[];
+  startTime: string;
+  endTime: string;
+  durationDays: number;
+  budgetBreakdown: BudgetBreakdown;
+  applicantName: string;
+  department: string;
+  notes: string;
+  reasoning: string;
+}
+
 // Inner Form Component mounted fresh each time modal opens
 function RecordFormContent({
   onClose,
   onSave,
   initialData,
   latestRecord,
+  historyRecords = [],
   onAutoSaveDraft,
 }: {
   onClose: () => void;
   onSave: (recordData: Partial<OutingRecord>) => Promise<void>;
   initialData?: OutingRecord | null;
   latestRecord?: OutingRecord | null;
+  historyRecords?: OutingRecord[];
   onAutoSaveDraft?: (draftData: Partial<OutingRecord>) => void;
 }) {
   const defaultTimes = getDefaultTimes();
@@ -257,6 +292,14 @@ function RecordFormContent({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [draftSavedTip, setDraftSavedTip] = useState<string | null>(null);
   const [isAutoFilled, setIsAutoFilled] = useState<boolean>(initialValues.isLoadedFromPrevious);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  // Smart inference state
+  const [isInferring, setIsInferring] = useState(false);
+  const [inferenceResult, setInferenceResult] = useState<InferredResult | null>(null);
+  const [inferenceError, setInferenceError] = useState<string | null>(null);
+  const [preInferenceSnapshot, setPreInferenceSnapshot] = useState<InferenceSnapshot | null>(null);
+  const [hasManualEdit, setHasManualEdit] = useState(false);
 
   // Form State initialized from previous values or initialData
   const [applicantName, setApplicantName] = useState(initialValues.applicantName);
@@ -302,11 +345,17 @@ function RecordFormContent({
   const [uploadFeedback, setUploadFeedback] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const quickFileInputRef = useRef<HTMLInputElement | null>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
 
   const showUploadFeedback = (msg: string) => {
     setUploadFeedback(msg);
     setTimeout(() => setUploadFeedback(null), 3500);
+  };
+
+  const showFormError = (msg: string) => {
+    setFormError(msg);
+    setTimeout(() => setFormError(null), 4000);
   };
 
   // Helper to persist current form state to localStorage
@@ -391,31 +440,222 @@ function RecordFormContent({
     persistCurrentForm({ destinations: updated });
   };
 
-  // Batch process files (from file input, WeChat drag, or clipboard paste)
-  const processFiles = (fileList: File[]) => {
-    if (!fileList || fileList.length === 0) return;
-
-    let processedCount = 0;
-    Array.from(fileList).forEach((file) => {
+  // Read single File into FileAttachment
+  const readSingleFile = (file: File): Promise<FileAttachment> => {
+    return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = (event) => {
         const dataUrl = event.target?.result as string;
-        const newFile: FileAttachment = {
+        resolve({
           id: `f-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
           name: file.name || `通知附件_${Date.now()}`,
           size: file.size,
           type: file.type || 'application/octet-stream',
           dataUrl,
           uploadedAt: new Date().toISOString().slice(0, 16).replace('T', ' '),
-        };
-        setFiles((prev) => [...prev, newFile]);
-        processedCount++;
-        if (processedCount === fileList.length) {
-          showUploadFeedback(`已成功导入 ${fileList.length} 个文件/批复通知`);
-        }
+        });
       };
+      reader.onerror = () => reject(new Error(`读取文件 ${file.name} 失败`));
       reader.readAsDataURL(file);
     });
+  };
+
+  // Apply inferred values to form state
+  const applyInferredValues = (inferred: InferredResult) => {
+    setPreInferenceSnapshot({
+      applicantName,
+      department,
+      activityType,
+      title,
+      destinations: [...destinations],
+      startTime,
+      endTime,
+      durationDays,
+      budgetBreakdown: { ...budgetBreakdown },
+      notes,
+    });
+
+    const nextActivityType = inferred.activityType || activityType;
+    const nextTitle = inferred.title || title;
+    const nextDestinations =
+      Array.isArray(inferred.destinations) && inferred.destinations.length >= 2
+        ? inferred.destinations
+        : destinations;
+    const nextStartTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(inferred.startTime)
+      ? inferred.startTime.slice(0, 16)
+      : startTime;
+    const nextEndTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(inferred.endTime)
+      ? inferred.endTime.slice(0, 16)
+      : endTime;
+    const nextDurationDays = Math.max(
+      1,
+      Math.round(inferred.durationDays || computeDays(nextStartTime, nextEndTime))
+    );
+    const nextBudgetBreakdown = inferred.budgetBreakdown || budgetBreakdown;
+    const nextApplicantName = inferred.applicantName || applicantName;
+    const nextDepartment = inferred.department || department;
+    const nextNotes = inferred.notes || notes;
+
+    setActivityType(nextActivityType);
+    setTitle(nextTitle);
+    setDestinations(nextDestinations);
+    setStartTime(nextStartTime);
+    setEndTime(nextEndTime);
+    setDurationDays(nextDurationDays);
+    setBudgetBreakdown(nextBudgetBreakdown);
+    setApplicantName(nextApplicantName);
+    setDepartment(nextDepartment);
+    setNotes(nextNotes);
+    setInferenceResult({
+      ...inferred,
+      destinations: nextDestinations,
+      startTime: nextStartTime,
+      endTime: nextEndTime,
+      durationDays: nextDurationDays,
+      budgetBreakdown: nextBudgetBreakdown,
+    });
+    setIsAutoFilled(false);
+
+    persistCurrentForm({
+      activityType: nextActivityType,
+      title: nextTitle,
+      destinations: nextDestinations,
+      startTime: nextStartTime,
+      endTime: nextEndTime,
+      durationDays: nextDurationDays,
+      budgetBreakdown: nextBudgetBreakdown,
+      applicantName: nextApplicantName,
+      department: nextDepartment,
+      notes: nextNotes,
+    });
+  };
+
+  // Undo AI smart inference fill
+  const handleUndoInference = () => {
+    if (!preInferenceSnapshot) return;
+    setApplicantName(preInferenceSnapshot.applicantName);
+    setDepartment(preInferenceSnapshot.department);
+    setActivityType(preInferenceSnapshot.activityType);
+    setTitle(preInferenceSnapshot.title);
+    setDestinations(preInferenceSnapshot.destinations);
+    setStartTime(preInferenceSnapshot.startTime);
+    setEndTime(preInferenceSnapshot.endTime);
+    setDurationDays(preInferenceSnapshot.durationDays);
+    setBudgetBreakdown(preInferenceSnapshot.budgetBreakdown);
+    setNotes(preInferenceSnapshot.notes);
+    persistCurrentForm(preInferenceSnapshot);
+    setInferenceResult(null);
+    setPreInferenceSnapshot(null);
+    showUploadFeedback('已撤销本次智能填充，恢复原有填写内容');
+  };
+
+  // Run AI inference on uploaded documents + historical records
+  const runSmartInference = async (targetFiles: FileAttachment[]) => {
+    if (!targetFiles || targetFiles.length === 0) {
+      setInferenceError('请先上传至少一份通知文件、公函或截图');
+      return;
+    }
+
+    setIsInferring(true);
+    setInferenceError(null);
+
+    try {
+      // Prepare payloads; extract text from .docx on client using mammoth if applicable
+      const preparedFiles = await Promise.all(
+        targetFiles.slice(0, 4).map(async (f) => {
+          const lowerName = (f.name || '').toLowerCase();
+          const isDocx =
+            lowerName.endsWith('.docx') ||
+            (f.type && f.type.includes('wordprocessingml'));
+
+          if (isDocx && f.dataUrl) {
+            try {
+              const base64Part = f.dataUrl.includes(',') ? f.dataUrl.split(',')[1] : f.dataUrl;
+              const binaryStr = atob(base64Part);
+              const bytes = new Uint8Array(binaryStr.length);
+              for (let i = 0; i < binaryStr.length; i++) {
+                bytes[i] = binaryStr.charCodeAt(i);
+              }
+              const mammothModule = await import('mammoth');
+              const extracted = await mammothModule.extractRawText({ arrayBuffer: bytes.buffer });
+              return {
+                name: f.name,
+                type: f.type,
+                extractedText: extracted.value || '',
+              };
+            } catch (e) {
+              console.warn('Docx text extraction failed, sending filename only:', e);
+            }
+          }
+
+          return {
+            name: f.name,
+            type: f.type,
+            dataUrl: f.dataUrl,
+          };
+        })
+      );
+
+      const compactHistory = historyRecords.slice(0, 10).map((r) => ({
+        applicantName: r.applicantName,
+        department: r.department,
+        activityType: r.activityType,
+        title: r.title,
+        destinations: r.destinations,
+        startTime: r.startTime,
+        endTime: r.endTime,
+        durationDays: r.durationDays,
+        budget: r.budget,
+        budgetBreakdown: r.budgetBreakdown,
+        notes: r.notes,
+      }));
+
+      const res = await fetch('/api/records/infer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          files: preparedFiles,
+          historyRecords: compactHistory,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success || !data.data) {
+        throw new Error(data.error || '智能识别失败，请重试');
+      }
+
+      applyInferredValues(data.data);
+      showUploadFeedback('已根据上传文件与历史记录智能推断并填写默认内容！');
+    } catch (err: any) {
+      console.error('Smart inference failed:', err);
+      setInferenceError(err?.message || '智能识别失败，请检查文件后重试或手动填写');
+    } finally {
+      setIsInferring(false);
+    }
+  };
+
+  // Batch process files (from file input, WeChat drag, or clipboard paste)
+  const processFiles = async (fileList: File[], autoInferOverride?: boolean) => {
+    if (!fileList || fileList.length === 0) return;
+
+    try {
+      const newlyReadFiles = await Promise.all(fileList.map(readSingleFile));
+      const updatedFiles = [...files, ...newlyReadFiles];
+      setFiles(updatedFiles);
+      showUploadFeedback(`已成功导入 ${newlyReadFiles.length} 个文件/批复通知`);
+
+      // Auto-trigger AI inference when uploaded from Step 1, or when creating a new record before manual edits
+      const shouldAutoInfer =
+        autoInferOverride !== undefined
+          ? autoInferOverride
+          : currentStep === 1 || (!initialData && !hasManualEdit);
+
+      if (shouldAutoInfer) {
+        await runSmartInference(updatedFiles);
+      }
+    } catch (err: any) {
+      showFormError(err?.message || '读取上传文件失败');
+    }
   };
 
   // Batch process photos (from file input, WeChat drag, or clipboard paste)
@@ -428,7 +668,7 @@ function RecordFormContent({
     );
 
     if (validImages.length === 0) {
-      alert('请拖入或选择图片格式文件（JPG/PNG/WEBP 等）');
+      showFormError('请拖入或选择图片格式文件（JPG/PNG/WEBP 等）');
       return;
     }
 
@@ -586,14 +826,15 @@ function RecordFormContent({
 
   // Safe step navigation
   const goToStep = (step: number) => {
+    setFormError(null);
     if (step === 2 && currentStep === 1) {
       if (!title.trim()) {
-        alert('请填写活动主题/主要事由');
+        showFormError('请填写活动主题/主要事由，或先在上方上传通知文件自动识别');
         return;
       }
       const validDestinations = destinations.filter((d) => d.trim().length > 0);
       if (validDestinations.length === 0) {
-        alert('请至少填写一个目的地');
+        showFormError('请至少填写一个目的地');
         return;
       }
     }
@@ -605,20 +846,21 @@ function RecordFormContent({
   };
 
   const handleNextStep = () => {
+    setFormError(null);
     if (currentStep === 1) {
       if (!title.trim()) {
-        alert('请填写活动主题/主要事由');
+        showFormError('请填写活动主题/主要事由，或先上传通知文件自动识别');
         return;
       }
       const validDestinations = destinations.filter((d) => d.trim().length > 0);
       if (validDestinations.length === 0) {
-        alert('请至少填写一个目的地');
+        showFormError('请至少填写一个目的地');
         return;
       }
       goToStep(2);
     } else if (currentStep === 2) {
       if (!startTime || !endTime) {
-        alert('请设置完整的出发和返回时间');
+        showFormError('请设置完整的出发和返回时间');
         return;
       }
       // Enter Step 3 cleanly
@@ -645,14 +887,14 @@ function RecordFormContent({
     }
 
     if (!title.trim()) {
-      alert('请填写活动主题/事由');
+      showFormError('请填写活动主题/事由');
       goToStep(1);
       return;
     }
 
     const validDestinations = destinations.filter((d) => d.trim().length > 0);
     if (validDestinations.length === 0) {
-      alert('请至少填写一个目的地');
+      showFormError('请至少填写一个目的地');
       goToStep(1);
       return;
     }
@@ -694,7 +936,7 @@ function RecordFormContent({
       });
       onClose();
     } catch (err: any) {
-      alert(err?.message || '保存失败，请重试');
+      showFormError(err?.message || '保存失败，请重试');
     } finally {
       setIsSubmitting(false);
     }
@@ -760,13 +1002,29 @@ function RecordFormContent({
         </div>
       )}
 
-      {/* Draft save or upload toast notification */}
+      {/* Draft save, upload toast, or form error notification */}
       {(draftSavedTip || uploadFeedback) && (
         <div className="bg-emerald-50 border-b border-emerald-200 px-4 py-1.5 flex items-center justify-between text-xs text-emerald-800 animate-in fade-in">
           <span className="flex items-center gap-1.5 font-medium">
             <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
             {draftSavedTip || uploadFeedback}
           </span>
+        </div>
+      )}
+
+      {formError && (
+        <div className="bg-rose-50 border-b border-rose-200 px-4 py-1.5 flex items-center justify-between text-xs text-rose-800 animate-in fade-in">
+          <span className="flex items-center gap-1.5 font-medium">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            {formError}
+          </span>
+          <button
+            type="button"
+            onClick={() => setFormError(null)}
+            className="text-rose-500 hover:text-rose-700"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
       )}
 
@@ -823,6 +1081,171 @@ function RecordFormContent({
         {/* STEP 1: 行程基本信息 */}
         {currentStep === 1 && (
           <div className="space-y-3.5 animate-in fade-in duration-150">
+            {/* Smart File Upload & Auto-Inference Card right at Step 1 */}
+            <div
+              onDragOver={handleFileDragOver}
+              onDragLeave={handleFileDragLeave}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setIsDraggingFile(false);
+                const droppedFiles = extractFiles(e.dataTransfer);
+                if (droppedFiles.length > 0) {
+                  processFiles(droppedFiles, true);
+                }
+              }}
+              onPaste={(e) => {
+                const pastedFiles = extractFiles(e.clipboardData);
+                if (pastedFiles.length > 0) {
+                  e.preventDefault();
+                  processFiles(pastedFiles, true);
+                }
+              }}
+              tabIndex={0}
+              className={`rounded-xl border p-3 transition-all outline-none ${
+                isDraggingFile
+                  ? 'border-emerald-500 bg-emerald-50 ring-2 ring-emerald-200'
+                  : 'border-indigo-200/90 bg-gradient-to-br from-indigo-50/80 via-blue-50/60 to-emerald-50/50'
+              }`}
+            >
+              <input
+                ref={quickFileInputRef}
+                type="file"
+                multiple
+                accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.txt"
+                onChange={(e) => {
+                  if (e.target.files) {
+                    processFiles(Array.from(e.target.files), true);
+                  }
+                  e.target.value = '';
+                }}
+                className="hidden"
+              />
+
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-start gap-2 min-w-0">
+                  <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-600 to-indigo-600 text-white flex items-center justify-center shrink-0 mt-0.5 shadow-2xs">
+                    {isInferring ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Wand2 className="w-4 h-4" />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-xs font-bold text-slate-900">
+                        微信文件/通知智能填表
+                      </span>
+                      <span className="text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded font-medium flex items-center gap-0.5">
+                        <WeChatIcon className="w-2.5 h-2.5 text-emerald-600" />
+                        <span>先传文件免手填</span>
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-600 mt-0.5 leading-snug">
+                      拖入、粘贴或上传 PDF 通知/微信截图/Word，结合过往记录自动推断事由、地点、时间与预算（将同步存至第 3 步）。
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={isInferring}
+                  onClick={() => quickFileInputRef.current?.click()}
+                  className="shrink-0 px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 active:scale-95 text-white text-[11px] font-semibold rounded-lg shadow-2xs flex items-center gap-1 transition-all"
+                >
+                  <Upload className="w-3 h-3" />
+                  <span>{files.length > 0 ? '继续传文件' : '上传/识别'}</span>
+                </button>
+              </div>
+
+              {/* Loading Progress Indicator */}
+              {isInferring && (
+                <div className="mt-2.5 bg-white/90 border border-blue-200 rounded-lg px-3 py-2 flex items-center gap-2 text-xs text-blue-800">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600 shrink-0" />
+                  <span>正在智能解析上传通知并结合历史记录推断时间、地点与预算...</span>
+                </div>
+              )}
+
+              {/* Inference Error */}
+              {inferenceError && !isInferring && (
+                <div className="mt-2.5 bg-rose-50 border border-rose-200 rounded-lg px-2.5 py-2 flex items-start justify-between gap-2 text-[11px] text-rose-800">
+                  <div className="flex items-start gap-1.5">
+                    <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0 mt-0.5" />
+                    <span>{inferenceError}</span>
+                  </div>
+                  {files.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => runSmartInference(files)}
+                      className="shrink-0 text-rose-700 underline font-semibold"
+                    >
+                      重试
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Already uploaded files quick bar (if not inferring) */}
+              {files.length > 0 && !isInferring && (
+                <div className="mt-2.5 pt-2 border-t border-indigo-200/60 flex items-center justify-between gap-2 text-[11px]">
+                  <div className="flex items-center gap-1.5 truncate text-slate-700">
+                    <Paperclip className="w-3 h-3 text-blue-600 shrink-0" />
+                    <span className="truncate">
+                      已关联 <strong>{files.length}</strong> 份通知文件：{files.map((f) => f.name).join('、')}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => runSmartInference(files)}
+                    className="shrink-0 px-2 py-1 bg-white hover:bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-md font-semibold flex items-center gap-1 transition-colors"
+                  >
+                    <Sparkles className="w-3 h-3" />
+                    <span>{inferenceResult ? '重新识别' : '智能推断填表'}</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Inferred Result Banner */}
+              {inferenceResult && !isInferring && (
+                <div className="mt-2 bg-white/95 border border-emerald-200 rounded-lg p-2.5 text-[11px] space-y-1.5 shadow-2xs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-emerald-800 flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      已智能填充行程与时间预算
+                    </span>
+                    {preInferenceSnapshot && (
+                      <button
+                        type="button"
+                        onClick={handleUndoInference}
+                        className="text-slate-500 hover:text-slate-800 flex items-center gap-0.5 underline"
+                      >
+                        <Undo2 className="w-3 h-3" />
+                        <span>撤销填充</span>
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-slate-600 leading-relaxed">{inferenceResult.reasoning}</p>
+                  <div className="flex flex-wrap gap-1.5 pt-0.5 text-[10px]">
+                    <span className="bg-blue-50 text-blue-800 px-1.5 py-0.5 rounded border border-blue-200/80">
+                      类型：{inferenceResult.activityType}
+                    </span>
+                    <span className="bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded border border-slate-200">
+                      时间：{inferenceResult.startTime.replace('T', ' ')} ~ {inferenceResult.endTime.slice(11, 16)}（{inferenceResult.durationDays}天）
+                    </span>
+                    <span className="bg-amber-50 text-amber-800 px-1.5 py-0.5 rounded border border-amber-200/80">
+                      预算：¥
+                      {(
+                        inferenceResult.budgetBreakdown.transport +
+                        inferenceResult.budgetBreakdown.accommodation +
+                        inferenceResult.budgetBreakdown.meals +
+                        inferenceResult.budgetBreakdown.other
+                      ).toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Activity Type Selection */}
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1.5">
@@ -834,6 +1257,7 @@ function RecordFormContent({
                     key={type}
                     type="button"
                     onClick={() => {
+                      setHasManualEdit(true);
                       setActivityType(type);
                       persistCurrentForm({ activityType: type });
                     }}
@@ -859,10 +1283,11 @@ function RecordFormContent({
                 required
                 value={title}
                 onChange={(e) => {
+                  setHasManualEdit(true);
                   setTitle(e.target.value);
                   persistCurrentForm({ title: e.target.value });
                 }}
-                placeholder="例如：华东区核心客户云架构部署及技术验收"
+                placeholder="例如：参加2026年“智慧徽师成长计划”系列培训"
                 className="w-full text-xs px-3 py-2 rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
               />
             </div>
@@ -1264,7 +1689,7 @@ function RecordFormContent({
 
               {/* Uploaded File List */}
               {files.length > 0 && (
-                <div className="mt-2.5 space-y-1.5">
+                <div className="mt-2.5 space-y-2">
                   <div className="flex items-center justify-between text-[11px] text-slate-500 px-1">
                     <span>已上传官方公函/通知文件 ({files.length})</span>
                     <span className="text-[10px] text-emerald-700">后续支持一键打印到 A4 纸</span>
@@ -1291,6 +1716,77 @@ function RecordFormContent({
                       </button>
                     </div>
                   ))}
+
+                  {/* Smart Infer Trigger in Step 3 */}
+                  <div className="bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-200 rounded-lg p-2.5 space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-bold text-indigo-950 flex items-center gap-1">
+                          <Wand2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                          <span>智能推断事由、时间、地点与预算</span>
+                        </p>
+                        <p className="text-[10px] text-indigo-700 mt-0.5">
+                          结合上方通知文件与过往记录，一键自动回填第 1~2 步表单
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={isInferring}
+                        onClick={() => runSmartInference(files)}
+                        className="shrink-0 px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-[11px] font-semibold rounded-lg shadow-2xs flex items-center gap-1 transition-all"
+                      >
+                        {isInferring ? (
+                          <>
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                            <span>识别中...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="w-3 h-3" />
+                            <span>{inferenceResult ? '重新推断回填' : '一键智能回填'}</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {inferenceError && !isInferring && (
+                      <p className="text-[11px] text-rose-700 bg-rose-50 border border-rose-200 rounded px-2 py-1">
+                        {inferenceError}
+                      </p>
+                    )}
+
+                    {inferenceResult && !isInferring && (
+                      <div className="bg-white/95 border border-emerald-200 rounded p-2 text-[11px] space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-emerald-800 flex items-center gap-1">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                            已同步推断：{inferenceResult.title}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => goToStep(1)}
+                              className="text-blue-600 hover:text-blue-800 underline font-medium"
+                            >
+                              核对第1/2步
+                            </button>
+                            {preInferenceSnapshot && (
+                              <button
+                                type="button"
+                                onClick={handleUndoInference}
+                                className="text-slate-500 hover:text-slate-800 underline"
+                              >
+                                撤销
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <p className="text-[10px] text-slate-600">
+                          路线：{inferenceResult.destinations.join(' → ')} ｜ 时间：{inferenceResult.startTime.replace('T', ' ')} ~ {inferenceResult.endTime.slice(11, 16)}（{inferenceResult.durationDays}天）
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -1525,6 +2021,7 @@ export function RecordFormModal({
   onSave,
   initialData,
   latestRecord,
+  historyRecords = [],
   onAutoSaveDraft,
 }: RecordFormModalProps) {
   if (!isOpen) return null;
@@ -1537,6 +2034,7 @@ export function RecordFormModal({
         onSave={onSave}
         initialData={initialData}
         latestRecord={latestRecord}
+        historyRecords={historyRecords}
         onAutoSaveDraft={onAutoSaveDraft}
       />
     </div>

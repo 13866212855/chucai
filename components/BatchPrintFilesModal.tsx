@@ -22,7 +22,7 @@ import {
   FileCheck,
 } from 'lucide-react';
 import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
+import { safeHtml2Canvas } from '@/lib/safeHtml2Canvas';
 import { getOfficialDocuments, getExcludedPhotosCount } from '@/lib/utils';
 import { OriginalFileRenderItem } from './OriginalFileRenderItem';
 
@@ -202,7 +202,7 @@ function BatchPrintFilesContent({
         setExportProgress(`正在渲染第 ${i + 1}/${pages.length} 页文件...`);
         const pageEl = pages[i];
 
-        const canvas = await html2canvas(pageEl, {
+        const canvas = await safeHtml2Canvas(pageEl, {
           scale: 2,
           useCORS: true,
           logging: false,
