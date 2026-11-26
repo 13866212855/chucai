@@ -27,6 +27,13 @@ export interface ImageTestResult {
   prompt: string;
 }
 
+function normalizeBaseUrl(rawUrl: string): string {
+  return (rawUrl || '')
+    .trim()
+    .replace(/\/+(chat\/completions|images\/generations)\/?$/i, '')
+    .replace(/\/+$/, '');
+}
+
 /**
  * 统一大模型文本生成请求 (OpenAI 兼容协议)
  */
@@ -44,8 +51,8 @@ export async function requestLLM(
   };
 
   const model = options.model || settings.textModel;
-  const baseUrl = settings.baseUrl.replace(/\/+$/, '');
-  const apiKey = settings.apiKey;
+  const baseUrl = normalizeBaseUrl(settings.baseUrl);
+  const apiKey = settings.apiKey.trim();
 
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
@@ -82,11 +89,20 @@ export async function testTextModel(
     ...customConfig,
   };
 
-  const baseUrl = settings.baseUrl.replace(/\/+$/, '');
-  const apiKey = settings.apiKey;
-  const model = settings.textModel;
+  const baseUrl = normalizeBaseUrl(settings.baseUrl);
+  const apiKey = settings.apiKey.trim();
+  const model = settings.textModel.trim();
 
   try {
+    if (!baseUrl || !apiKey || !model) {
+      return {
+        success: false,
+        model: model || '未填写',
+        error: '请先完整填写 API 接口地址、API Key 和文本模型名称后再测试。',
+        latencyMs: 0,
+      };
+    }
+
     const messages: ChatMessage[] = [
       {
         role: 'system',
@@ -122,6 +138,14 @@ export async function testTextModel(
         hint = '\n\n💡 诊断提示：API Key 无效或已过期（401），请检查密钥是否填写正确。';
       } else if (res.status === 404) {
         hint = '\n\n💡 诊断提示：接口地址或模型名称不存在（404），请确认 Base URL 末尾是否包含 /v1 以及模型名称是否正确。';
+      } else if (errText.includes('1211') || errText.includes('模型不存在') || /model.*not.*(found|exist)/i.test(errText)) {
+        if (/^gml[-_]/i.test(model)) {
+          hint = `\n\n💡 诊断提示：模型名称拼写有误！您填写的是 "${model}"（gml），智谱模型正确前缀应为 "glm-"（例如：glm-4.7、glm-4.5、glm-5）。请修改后保存重试。`;
+        } else if (baseUrl.includes('bigmodel.cn/api/coding')) {
+          hint = `\n\n💡 诊断提示：智谱 Coding 专属端点 (/api/coding/paas/v4) 不识别 "${model}"，请尝试使用套餐支持的模型代码：glm-4.7、glm-4.5 或 glm-5。`;
+        } else {
+          hint = `\n\n💡 诊断提示：当前服务商不支持模型名称 "${model}"，请核对控制台文档中的准确模型代码。`;
+        }
       }
       return {
         success: false,
@@ -170,19 +194,41 @@ export async function testImageModel(
     ...customConfig,
   };
 
-  const baseUrl = settings.baseUrl.replace(/\/+$/, '');
-  const apiKey = settings.apiKey;
-  const model = settings.imageModel;
+  let effectiveBaseUrl = normalizeBaseUrl(settings.baseUrl);
+  const apiKey = settings.apiKey.trim();
+  let effectiveModel = settings.imageModel.trim();
+
+  // 智谱 Coding Plan (/api/coding/paas/v4) 仅提供代码/文本接口，图片生成自动切换至智谱通用端点 (/api/paas/v4)
+  const isZhipuCoding = effectiveBaseUrl.includes('open.bigmodel.cn/api/coding');
+  if (isZhipuCoding) {
+    effectiveBaseUrl = effectiveBaseUrl.replace('/api/coding/paas/v4', '/api/paas/v4');
+  }
+
+  // 若智谱环境下图片模型误填为文本对话模型（如 glm-4.7 / glm-5.4 / gml-5.4），自动回退为免费生图模型 cogview-3-flash
+  const isZhipu = effectiveBaseUrl.includes('open.bigmodel.cn');
+  if (isZhipu && /^(glm-[345]|gml-|deepseek)/i.test(effectiveModel)) {
+    effectiveModel = 'cogview-3-flash';
+  }
 
   try {
-    const res = await fetch(`${baseUrl}/images/generations`, {
+    if (!effectiveBaseUrl || !apiKey || !effectiveModel) {
+      return {
+        success: false,
+        model: effectiveModel || '未填写',
+        prompt,
+        error: '请先完整填写 API 接口地址、API Key 和图片模型名称后再测试。',
+        latencyMs: 0,
+      };
+    }
+
+    const res = await fetch(`${effectiveBaseUrl}/images/generations`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model,
+        model: effectiveModel,
         prompt: prompt || '现代企业科技感外出出差移动端看板图标插画，极简商务科技矢量风格',
         n: 1,
         size: '1024x1024',
@@ -198,10 +244,16 @@ export async function testImageModel(
         hint = '\n\n💡 诊断提示：当前预设的 ApiHub Agnes 默认体验密钥已被上游平台风控临时限制（403），请在上方更换您自己的 API 密钥后保存重试。';
       } else if (res.status === 401) {
         hint = '\n\n💡 诊断提示：API Key 无效或已过期（401），请检查密钥配置。';
+      } else if (errText.includes('1113') || errText.includes('余额不足') || errText.includes('资源包')) {
+        hint = '\n\n💡 诊断提示：已为您自动通过智谱通用端点调用 cogview-3-flash，但当前智谱账号仅开通了 Coding 文本套餐、通用账户余额/免费资源包未激活（错误码 1113）。如需使用生图功能请在智谱控制台开通/领取通用资源包；前台“一键智能回填”仅使用文本大模型，不受影响。';
+      } else if (isZhipuCoding) {
+        hint = `\n\n💡 诊断提示：已自动尝试通过智谱通用端点 (${effectiveBaseUrl}) 调用 ${effectiveModel}，但未通过。可能当前 Coding Plan 专属密钥不支持通用生图接口（前台智能填表仅使用文本大模型，已可正常使用）。`;
+      } else if (errText.includes('1211') || errText.includes('模型不存在') || /model.*not.*(found|exist)/i.test(errText)) {
+        hint = `\n\n💡 诊断提示：图片模型名称 "${effectiveModel}" 不存在或不是绘图模型（例如智谱生图模型为 cogview-3-flash / cogview-4，OpenAI 为 dall-e-3）。`;
       }
       return {
         success: false,
-        model,
+        model: effectiveModel,
         prompt,
         error: `HTTP ${res.status}: ${errText.slice(0, 500)}${hint}`,
         latencyMs,
@@ -223,7 +275,7 @@ export async function testImageModel(
     if (!imageUrl) {
       return {
         success: false,
-        model,
+        model: effectiveModel,
         prompt,
         error: `响应未包含有效图片 URL: ${JSON.stringify(data).slice(0, 200)}`,
         latencyMs,
@@ -232,7 +284,7 @@ export async function testImageModel(
 
     return {
       success: true,
-      model,
+      model: effectiveModel,
       imageUrl,
       prompt,
       latencyMs,
@@ -241,7 +293,7 @@ export async function testImageModel(
     const latencyMs = Date.now() - startTime;
     return {
       success: false,
-      model,
+      model: effectiveModel,
       prompt,
       error: error?.message || '图片生成接口调用失败',
       latencyMs,

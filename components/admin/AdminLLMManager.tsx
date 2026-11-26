@@ -62,9 +62,15 @@ export function AdminLLMManager() {
       imageModel: 'black-forest-labs/FLUX.1-schnell',
     },
     {
-      label: '智谱 GLM',
+      label: '智谱 GLM (通用)',
       baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
       textModel: 'glm-4-flash',
+      imageModel: 'cogview-3-flash',
+    },
+    {
+      label: '智谱 Coding 套餐',
+      baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+      textModel: 'glm-4.7',
       imageModel: 'cogview-3-flash',
     },
     {
@@ -119,7 +125,11 @@ export function AdminLLMManager() {
         const res = await fetch('/api/admin/llm/settings');
         const data = await res.json();
         if (isMounted && data.success && data.data) {
-          setSettings(data.data);
+          const loaded = { ...data.data };
+          if (loaded.imageModel && loaded.imageModel.startsWith('sk-')) {
+            loaded.imageModel = 'Agnes-Image-2.1-flash';
+          }
+          setSettings(loaded);
         }
       } catch (err) {
         console.error('Failed to load LLM settings:', err);
@@ -141,6 +151,12 @@ export function AdminLLMManager() {
     setIsSaving(true);
     setSaveSuccessTip(null);
     setSaveErrorTip(null);
+
+    if (settings.imageModel.trim().startsWith('sk-')) {
+      setSaveErrorTip('「图片模型名称」误填成了 sk- 开头的密钥（可能被浏览器自动填充覆盖），请改为模型名如 Agnes-Image-2.1-flash 或 dall-e-3');
+      setIsSaving(false);
+      return;
+    }
 
     try {
       const res = await fetch('/api/admin/llm/settings', {
@@ -314,7 +330,7 @@ export function AdminLLMManager() {
           </button>
         </div>
 
-        <form onSubmit={handleSaveSettings} className="p-5 space-y-4 text-xs">
+        <form onSubmit={handleSaveSettings} autoComplete="off" className="p-5 space-y-4 text-xs">
           {/* Upstream Default Key Notice & Quick Provider Presets */}
           <div className="p-3 bg-amber-50/90 border border-amber-200 rounded-xl text-amber-900 space-y-2">
             <div className="flex items-start gap-2">
@@ -376,6 +392,8 @@ export function AdminLLMManager() {
               </label>
               <input
                 type="url"
+                name="llm_base_url"
+                autoComplete="off"
                 value={settings.baseUrl}
                 onChange={(e) => setSettings({ ...settings, baseUrl: e.target.value })}
                 placeholder="例如：https://apihub.agnes-ai.com/v1"
@@ -389,17 +407,34 @@ export function AdminLLMManager() {
 
             {/* API Key */}
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center gap-1.5">
-                <Key className="w-3.5 h-3.5 text-amber-600" />
-                <span>API 访问密钥 (API Key)</span>
-              </label>
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                  <Key className="w-3.5 h-3.5 text-amber-600" />
+                  <span>API 访问密钥 (API Key)</span>
+                </label>
+                {settings.apiKey === 'sk-vWM7RHG5n7bljBNi3GgHfygxqiKlUYrPWZLLSUByIGm4BiM9' && (
+                  <button
+                    type="button"
+                    onClick={() => setSettings({ ...settings, apiKey: '' })}
+                    className="text-[10px] text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-1.5 py-0.5 rounded font-medium cursor-pointer"
+                  >
+                    默认试用 Key 已失效 · 点击清空以填写新 Key
+                  </button>
+                )}
+              </div>
               <div className="relative">
                 <input
                   type={showApiKey ? 'text' : 'password'}
+                  name="llm_api_key"
+                  autoComplete="new-password"
                   value={settings.apiKey}
                   onChange={(e) => setSettings({ ...settings, apiKey: e.target.value })}
-                  placeholder="sk-..."
-                  className="w-full pl-3 pr-10 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs text-slate-900 font-mono focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:bg-white"
+                  placeholder="请粘贴您自己的 sk-... 密钥"
+                  className={`w-full pl-3 pr-10 py-2 border rounded-lg text-xs text-slate-900 font-mono focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:bg-white ${
+                    settings.apiKey === 'sk-vWM7RHG5n7bljBNi3GgHfygxqiKlUYrPWZLLSUByIGm4BiM9'
+                      ? 'bg-rose-50/50 border-rose-300'
+                      : 'bg-slate-50 border-slate-300'
+                  }`}
                   required
                 />
                 <button
@@ -411,32 +446,54 @@ export function AdminLLMManager() {
                 </button>
               </div>
               <span className="text-[11px] text-slate-400 mt-1 block">
-                鉴权 Token，请妥善保管防范外泄
+                鉴权 Token，请填写您自己账号申请的可用密钥并点击保存
               </span>
             </div>
 
             {/* Text Model */}
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center gap-1.5">
-                <Bot className="w-3.5 h-3.5 text-indigo-600" />
-                <span>文本模型名称 (Text Model)</span>
-              </label>
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                  <Bot className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>文本模型名称 (Text Model)</span>
+                </label>
+                {/^gml[-_]/i.test(settings.textModel.trim()) && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSettings({
+                        ...settings,
+                        textModel: settings.textModel.trim().replace(/^gml/i, 'glm'),
+                      })
+                    }
+                    className="text-[10px] text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-1.5 py-0.5 rounded font-medium cursor-pointer"
+                  >
+                    拼写疑似有误（gml→glm）· 点击一键修正
+                  </button>
+                )}
+              </div>
               <input
                 type="text"
+                name="llm_text_model"
+                autoComplete="off"
                 value={settings.textModel}
                 onChange={(e) => setSettings({ ...settings, textModel: e.target.value })}
-                placeholder="例如：Agnes-2.5-flash"
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs text-slate-900 font-mono focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:bg-white"
+                placeholder="例如：glm-4.7 或 deepseek-chat"
+                className={`w-full px-3 py-2 border rounded-lg text-xs text-slate-900 font-mono focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:bg-white ${
+                  /^gml[-_]/i.test(settings.textModel.trim())
+                    ? 'bg-rose-50/50 border-rose-300'
+                    : 'bg-slate-50 border-slate-300'
+                }`}
                 required
               />
-              <div className="flex gap-1.5 mt-1">
+              <div className="flex flex-wrap gap-1.5 mt-1">
                 <span className="text-[10px] text-slate-400">快速设置:</span>
-                {['Agnes-2.5-flash', 'gpt-4o-mini', 'gemini-2.5-flash'].map((m) => (
+                {['glm-4.7', 'glm-4.5', 'glm-5', 'glm-4-flash', 'deepseek-chat', 'gpt-4o-mini'].map((m) => (
                   <button
                     key={m}
                     type="button"
                     onClick={() => setSettings({ ...settings, textModel: m })}
-                    className="text-[10px] text-blue-600 hover:underline"
+                    className="text-[10px] text-blue-600 hover:underline cursor-pointer"
                   >
                     {m}
                   </button>
@@ -446,26 +503,54 @@ export function AdminLLMManager() {
 
             {/* Image Model */}
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center gap-1.5">
-                <ImageIcon className="w-3.5 h-3.5 text-purple-600" />
-                <span>图片模型名称 (Image Model)</span>
-              </label>
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                  <ImageIcon className="w-3.5 h-3.5 text-purple-600" />
+                  <span>图片模型名称 (Image Model)</span>
+                </label>
+                {settings.imageModel.startsWith('sk-') ? (
+                  <button
+                    type="button"
+                    onClick={() => setSettings({ ...settings, imageModel: 'cogview-3-flash' })}
+                    className="text-[10px] text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-1.5 py-0.5 rounded font-medium cursor-pointer"
+                  >
+                    误填成密钥，点击恢复默认模型名
+                  </button>
+                ) : (
+                  /^(glm-[345]|gml-|deepseek)/i.test(settings.imageModel.trim()) && (
+                    <button
+                      type="button"
+                      onClick={() => setSettings({ ...settings, imageModel: 'cogview-3-flash' })}
+                      className="text-[10px] text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded font-medium cursor-pointer"
+                    >
+                      当前为文本模型 · 点击切为生图模型 cogview-3-flash
+                    </button>
+                  )
+                )}
+              </div>
               <input
                 type="text"
+                name="llm_image_model"
+                autoComplete="off"
                 value={settings.imageModel}
                 onChange={(e) => setSettings({ ...settings, imageModel: e.target.value })}
-                placeholder="例如：Agnes-Image-2.1-flash"
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs text-slate-900 font-mono focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:bg-white"
+                placeholder="例如：cogview-3-flash 或 dall-e-3"
+                className={`w-full px-3 py-2 border rounded-lg text-xs text-slate-900 font-mono focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:bg-white ${
+                  settings.imageModel.startsWith('sk-') ||
+                  /^(glm-[345]|gml-|deepseek)/i.test(settings.imageModel.trim())
+                    ? 'bg-amber-50/60 border-amber-300'
+                    : 'bg-slate-50 border-slate-300'
+                }`}
                 required
               />
-              <div className="flex gap-1.5 mt-1">
+              <div className="flex flex-wrap gap-1.5 mt-1">
                 <span className="text-[10px] text-slate-400">快速设置:</span>
-                {['Agnes-Image-2.1-flash', 'dall-e-3'].map((m) => (
+                {['cogview-3-flash', 'cogview-4', 'dall-e-3', 'Agnes-Image-2.1-flash'].map((m) => (
                   <button
                     key={m}
                     type="button"
                     onClick={() => setSettings({ ...settings, imageModel: m })}
-                    className="text-[10px] text-purple-600 hover:underline"
+                    className="text-[10px] text-purple-600 hover:underline cursor-pointer"
                   >
                     {m}
                   </button>
