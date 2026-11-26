@@ -31,7 +31,7 @@ COPY . .
 # 执行 Next.js 生产环境构建
 RUN npm run build
 
-# 验证构建产物完整性，确保未生成异常或损坏的 Bundle 包
+# 验证构建产物完整性，确保未生成异常或损坏的 Bundle 包，并清理无需带入运行阶段的构建缓存
 RUN test -f .next/build-manifest.json && \
     test -d .next/server && \
     test -d .next/static && \
@@ -40,7 +40,8 @@ RUN test -f .next/build-manifest.json && \
       const bm = JSON.parse(fs.readFileSync('.next/build-manifest.json', 'utf8')); \
       const pm = JSON.parse(fs.readFileSync('.next/prerender-manifest.json', 'utf8')); \
       console.log('✓ Next.js build bundle verified successfully. Pages count:', Object.keys(bm.pages || {}).length); \
-    "
+    " && \
+    rm -rf .next/cache
 
 # ==========================================
 # 阶段 2: 运行阶段 (Runner) 使用轻量版 node:20-slim
@@ -64,6 +65,7 @@ COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
+COPY --from=builder /app/next.config.ts ./next.config.ts
 COPY --from=builder /app/start.js ./start.js
 
 # 创建并确保持久化数据目录存在

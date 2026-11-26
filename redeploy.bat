@@ -14,11 +14,32 @@ echo Done.
 echo.
 
 echo [2/4] Building Docker image...
+:: 禁用 Buildx 默认 attestation/provenance 清单，避免 Docker Desktop containerd 导出镜像时出现 parent snapshot not found 异常
+set "BUILDX_NO_DEFAULT_ATTESTATIONS=1"
 docker build -t chucai:latest .
 if errorlevel 1 (
-    echo [ERROR] Docker build failed. Deployment aborted.
-    pause
-    exit /b 1
+    echo.
+    echo [自动恢复] 检测到 Docker BuildKit 缓存/快照异常（parent snapshot not found），正在清理损坏缓存并无缓存重建...
+    docker rmi -f chucai:latest 2>nul
+    docker builder prune -af
+    docker image prune -f >nul 2>&1
+    docker build --no-cache -t chucai:latest .
+    if errorlevel 1 (
+        echo.
+        echo [自动恢复 2] 正在尝试切换经典构建模式 ^(DOCKER_BUILDKIT=0^) 重试...
+        set "DOCKER_BUILDKIT=0"
+        docker build --no-cache -t chucai:latest .
+        if errorlevel 1 (
+            echo [ERROR] Docker build failed. Deployment aborted.
+            echo.
+            echo [故障排查建议]：
+            echo 1. 报错 "parent snapshot ... does not exist" 属于 Docker Desktop 本地 containerd 快照缓存损坏。
+            echo 2. 请依次执行: wsl --shutdown，然后重启 Docker Desktop。
+            echo 3. 如仍报错，请在 Docker Desktop 设置 - General 中取消勾选 "Use containerd for pulling and storing images" 并重启后重试。
+            pause
+            exit /b 1
+        )
+    )
 )
 echo Build successful.
 echo.
