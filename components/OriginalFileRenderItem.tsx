@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { FileAttachment, OutingRecord } from '@/types/outing';
+import { loadClientPdfJs, PDFJS_CMAP_URL, PDFJS_STANDARD_FONT_URL } from '@/lib/pdfClient';
 import {
   FileText,
   Download,
@@ -234,86 +235,6 @@ export function OriginalFileRenderItem({
 }
 
 /**
- * Load PDF.js client library directly from pre-built local static bundle
- * Avoids Webpack dynamic chunk splitting ChunkLoadError and Unexpected token '<'
- */
-async function loadPdfJsLibrary(): Promise<any> {
-  if (typeof window === 'undefined') {
-    throw new Error('PDF.js can only be loaded on the client');
-  }
-
-  if ((window as any).pdfjsLib) {
-    const lib = (window as any).pdfjsLib;
-    if (!lib.GlobalWorkerOptions?.workerSrc) {
-      lib.GlobalWorkerOptions = lib.GlobalWorkerOptions || {};
-      lib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
-    }
-    return lib;
-  }
-
-  return new Promise((resolve, reject) => {
-    let script = document.querySelector('script[data-pdfjs-loader="true"]') as HTMLScriptElement | null;
-    if (script) {
-      if ((window as any).pdfjsLib) {
-        const lib = (window as any).pdfjsLib;
-        lib.GlobalWorkerOptions = lib.GlobalWorkerOptions || {};
-        lib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
-        resolve(lib);
-      } else {
-        script.addEventListener('load', () => {
-          const lib = (window as any).pdfjsLib;
-          if (lib) {
-            lib.GlobalWorkerOptions = lib.GlobalWorkerOptions || {};
-            lib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
-            resolve(lib);
-          } else {
-            reject(new Error('pdfjsLib is not defined'));
-          }
-        });
-        script.addEventListener('error', (e) => reject(e));
-      }
-      return;
-    }
-
-    script = document.createElement('script');
-    script.setAttribute('data-pdfjs-loader', 'true');
-    script.src = '/pdf.min.js';
-    script.async = true;
-
-    script.onload = () => {
-      const lib = (window as any).pdfjsLib;
-      if (lib) {
-        lib.GlobalWorkerOptions = lib.GlobalWorkerOptions || {};
-        lib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
-        resolve(lib);
-      } else {
-        reject(new Error('pdfjsLib not defined after loading /pdf.min.js'));
-      }
-    };
-
-    script.onerror = () => {
-      // Fallback to CDN if needed
-      const cdnScript = document.createElement('script');
-      cdnScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
-      cdnScript.onload = () => {
-        const cdnLib = (window as any).pdfjsLib;
-        if (cdnLib) {
-          cdnLib.GlobalWorkerOptions = cdnLib.GlobalWorkerOptions || {};
-          cdnLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-          resolve(cdnLib);
-        } else {
-          reject(new Error('CDN PDF.js not defined'));
-        }
-      };
-      cdnScript.onerror = (e) => reject(e);
-      document.head.appendChild(cdnScript);
-    };
-
-    document.head.appendChild(script);
-  });
-}
-
-/**
  * PDF Original Pages Viewer
  * Renders each page of the uploaded PDF to high-resolution canvas
  */
@@ -338,8 +259,8 @@ function PdfOriginalPagesViewer({
         setLoading(true);
         setError(null);
 
-        // Load standalone pdfjs-dist without Webpack chunk splitting
-        const pdfjsLib = await loadPdfJsLibrary();
+        // Load standalone pdfjs-dist (shared loader in lib/pdfClient, always settles)
+        const pdfjsLib = await loadClientPdfJs();
 
         // Convert base64 DataURL to Uint8Array
         const base64Data = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
@@ -351,8 +272,10 @@ function PdfOriginalPagesViewer({
 
         const loadingTask = pdfjsLib.getDocument({
           data: bytes,
-          cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/',
+          // Same-origin resources only: public CDNs are unreachable on many domestic networks.
+          cMapUrl: PDFJS_CMAP_URL,
           cMapPacked: true,
+          standardFontDataUrl: PDFJS_STANDARD_FONT_URL,
         });
 
         const pdfDoc = await loadingTask.promise;

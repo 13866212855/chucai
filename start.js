@@ -48,10 +48,18 @@ nextProcess.on('exit', (code, signal) => {
 // 4. 创建 TCP 端口桥接，使 localhost:7860 与 localhost:3000 均可响应请求
 const bridgeServer = net.createServer((socket) => {
   const client = net.createConnection({ port: mainPort, host: '127.0.0.1' });
+
+  // 任一端断开或出错时必须同步关闭另一端：
+  // - 出错：直接销毁对端，让浏览器立刻收到网络错误而不是无限等待；
+  // - 正常关闭（如上游 Next.js 回收空闲 keep-alive 连接）：对端调用 end()，
+  //   否则浏览器会继续复用这条“半死”连接发送下一个请求，数据被写入已销毁的上游
+  //   连接而丢失，表现为接口永久 pending、前端一直显示“识别中”。
   socket.pipe(client);
   client.pipe(socket);
-  socket.on('error', () => {});
-  client.on('error', () => {});
+  socket.on('error', () => client.destroy());
+  client.on('error', () => socket.destroy());
+  socket.on('close', (hadError) => (hadError ? client.destroy() : client.end()));
+  client.on('close', (hadError) => (hadError ? socket.destroy() : socket.end()));
 });
 
 bridgeServer.on('error', (err) => {

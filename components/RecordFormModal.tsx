@@ -32,7 +32,11 @@ import {
   Undo2,
   ExternalLink,
 } from 'lucide-react';
-import { extractPdfForInference, compressImageDataUrl } from '@/lib/pdfClient';
+import { extractPdfForInference, compressImageDataUrl, withTimeout } from '@/lib/pdfClient';
+
+/** Client-side budgets so the UI can never stay in "识别中" forever. */
+const FILE_PARSE_TIMEOUT_MS = 50_000;
+const INFER_REQUEST_TIMEOUT_MS = 150_000;
 
 interface RecordFormModalProps {
   isOpen: boolean;
@@ -266,6 +270,114 @@ interface InferredResult {
   reasoning: string;
 }
 
+/**
+ * Convert one uploaded attachment into a lightweight payload for /api/records/infer.
+ * Extracts text (docx / pdf / txt) or compresses images; returns name+type only on failure.
+ */
+async function prepareFileForInference(
+  f: FileAttachment,
+  onStage: (stage: string) => void
+): Promise<{
+  name: string;
+  type: string;
+  extractedText?: string;
+  pageImages?: string[];
+  imageDataUrl?: string;
+}> {
+  const lowerName = (f.name || '').toLowerCase();
+  const lowerType = (f.type || '').toLowerCase();
+
+  const isDocx =
+    lowerName.endsWith('.docx') ||
+    lowerType.includes('wordprocessingml');
+  const isPdf =
+    lowerName.endsWith('.pdf') ||
+    lowerType.includes('pdf');
+  const isImage =
+    lowerType.startsWith('image/') ||
+    /\.(png|jpe?g|webp|gif|bmp)$/.test(lowerName);
+  const isText =
+    lowerType.startsWith('text/') ||
+    /\.(txt|md|csv)$/.test(lowerName);
+
+  const dataUrlToBytes = () => {
+    const base64Part = f.dataUrl!.includes(',') ? f.dataUrl!.split(',')[1] : f.dataUrl!;
+    const binaryStr = atob(base64Part);
+    const bytes = new Uint8Array(binaryStr.length);
+    for (let i = 0; i < binaryStr.length; i++) {
+      bytes[i] = binaryStr.charCodeAt(i);
+    }
+    return bytes;
+  };
+
+  if (isDocx && f.dataUrl) {
+    try {
+      onStage('正在提取 Word 文本...');
+      const bytes = dataUrlToBytes();
+      const mammothModule = await import('mammoth');
+      const extracted = await mammothModule.extractRawText({ arrayBuffer: bytes.buffer });
+      return {
+        name: f.name,
+        type: f.type,
+        extractedText: extracted.value || '',
+      };
+    } catch (e) {
+      console.warn('Docx text extraction failed, sending filename only:', e);
+    }
+  }
+
+  if (isPdf && f.dataUrl) {
+    try {
+      onStage('正在加载 PDF 解析引擎...');
+      const { extractedText, pageImages } = await extractPdfForInference(f.dataUrl, {
+        timeoutMs: FILE_PARSE_TIMEOUT_MS - 2000,
+        onStage,
+      });
+      return {
+        name: f.name,
+        type: f.type,
+        extractedText,
+        pageImages,
+      };
+    } catch (e) {
+      console.warn('Client PDF extraction failed, sending filename only:', e);
+    }
+  }
+
+  if (isImage && f.dataUrl) {
+    try {
+      onStage('正在压缩图片...');
+      const compressed = await compressImageDataUrl(f.dataUrl);
+      return {
+        name: f.name,
+        type: f.type,
+        imageDataUrl: compressed,
+      };
+    } catch (e) {
+      console.warn('Image compression failed:', e);
+    }
+  }
+
+  if (isText && f.dataUrl) {
+    try {
+      onStage('正在读取文本内容...');
+      const decoded = new TextDecoder('utf-8').decode(dataUrlToBytes());
+      return {
+        name: f.name,
+        type: f.type,
+        extractedText: decoded.slice(0, 12000),
+      };
+    } catch (e) {
+      console.warn('Text decoding failed:', e);
+    }
+  }
+
+  return {
+    name: f.name,
+    type: f.type,
+  };
+}
+
 // Inner Form Component mounted fresh each time modal opens
 function RecordFormContent({
   onClose,
@@ -298,6 +410,9 @@ function RecordFormContent({
 
   // Smart inference state
   const [isInferring, setIsInferring] = useState(false);
+  const [inferenceStage, setInferenceStage] = useState<string | null>(null);
+  // Only the latest inference run may update state (uploads while a run is in flight).
+  const inferenceSeqRef = useRef(0);
   const [inferenceResult, setInferenceResult] = useState<InferredResult | null>(null);
   const [inferenceError, setInferenceError] = useState<string | null>(null);
   const [inferenceWarning, setInferenceWarning] = useState<string | null>(null);
@@ -562,103 +677,38 @@ function RecordFormContent({
       return;
     }
 
+    const runSeq = ++inferenceSeqRef.current;
+    const isCurrentRun = () => inferenceSeqRef.current === runSeq;
+
     setIsInferring(true);
+    setInferenceStage('正在读取上传文件...');
     setInferenceError(null);
     setInferenceWarning(null);
     setInferenceSource(null);
 
     try {
-      // Prepare lightweight payloads on client to prevent oversized requests or server HTML 413/502 errors
+      // Prepare lightweight payloads on client to prevent oversized requests or server HTML 413/502 errors.
+      // Every file is bounded by FILE_PARSE_TIMEOUT_MS and falls back to "filename only"
+      // on any failure, so one bad file can never block the whole inference.
+      const filesToPrepare = targetFiles.slice(0, 4);
       const preparedFiles = await Promise.all(
-        targetFiles.slice(0, 4).map(async (f) => {
-          const lowerName = (f.name || '').toLowerCase();
-          const lowerType = (f.type || '').toLowerCase();
-
-          const isDocx =
-            lowerName.endsWith('.docx') ||
-            lowerType.includes('wordprocessingml');
-          const isPdf =
-            lowerName.endsWith('.pdf') ||
-            lowerType.includes('pdf');
-          const isImage =
-            lowerType.startsWith('image/') ||
-            /\.(png|jpe?g|webp|gif|bmp)$/.test(lowerName);
-          const isText =
-            lowerType.startsWith('text/') ||
-            /\.(txt|md|csv)$/.test(lowerName);
-
-          if (isDocx && f.dataUrl) {
-            try {
-              const base64Part = f.dataUrl.includes(',') ? f.dataUrl.split(',')[1] : f.dataUrl;
-              const binaryStr = atob(base64Part);
-              const bytes = new Uint8Array(binaryStr.length);
-              for (let i = 0; i < binaryStr.length; i++) {
-                bytes[i] = binaryStr.charCodeAt(i);
-              }
-              const mammothModule = await import('mammoth');
-              const extracted = await mammothModule.extractRawText({ arrayBuffer: bytes.buffer });
-              return {
-                name: f.name,
-                type: f.type,
-                extractedText: extracted.value || '',
-              };
-            } catch (e) {
-              console.warn('Docx text extraction failed, sending filename only:', e);
+        filesToPrepare.map((f, index) => {
+          const setStage = (stage: string) => {
+            if (isCurrentRun()) {
+              setInferenceStage(`（${index + 1}/${filesToPrepare.length}）${f.name}：${stage}`);
             }
-          }
-
-          if (isPdf && f.dataUrl) {
-            try {
-              const { extractedText, pageImages } = await extractPdfForInference(f.dataUrl);
-              return {
-                name: f.name,
-                type: f.type,
-                extractedText,
-                pageImages,
-              };
-            } catch (e) {
-              console.warn('Client PDF extraction failed, sending filename only:', e);
-            }
-          }
-
-          if (isImage && f.dataUrl) {
-            try {
-              const compressed = await compressImageDataUrl(f.dataUrl);
-              return {
-                name: f.name,
-                type: f.type,
-                imageDataUrl: compressed,
-              };
-            } catch (e) {
-              console.warn('Image compression failed:', e);
-            }
-          }
-
-          if (isText && f.dataUrl) {
-            try {
-              const base64Part = f.dataUrl.includes(',') ? f.dataUrl.split(',')[1] : f.dataUrl;
-              const binaryStr = atob(base64Part);
-              const bytes = new Uint8Array(binaryStr.length);
-              for (let i = 0; i < binaryStr.length; i++) {
-                bytes[i] = binaryStr.charCodeAt(i);
-              }
-              const decoded = new TextDecoder('utf-8').decode(bytes);
-              return {
-                name: f.name,
-                type: f.type,
-                extractedText: decoded.slice(0, 12000),
-              };
-            } catch (e) {
-              console.warn('Text decoding failed:', e);
-            }
-          }
-
-          return {
-            name: f.name,
-            type: f.type,
           };
+          setStage('正在解析文件内容...');
+
+          return withTimeout(prepareFileForInference(f, setStage), FILE_PARSE_TIMEOUT_MS, `${f.name} 解析`)
+            .catch((e) => {
+              console.warn('File parsing failed, sending filename only:', f.name, e);
+              return { name: f.name, type: f.type };
+            });
         })
       );
+
+      if (!isCurrentRun()) return;
 
       const compactHistory = historyRecords.slice(0, 10).map((r) => ({
         applicantName: r.applicantName,
@@ -674,14 +724,31 @@ function RecordFormContent({
         notes: r.notes,
       }));
 
-      const res = await fetch('/api/records/infer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          files: preparedFiles,
-          historyRecords: compactHistory,
-        }),
-      });
+      const inferController = new AbortController();
+      const inferTimer = setTimeout(() => inferController.abort(), INFER_REQUEST_TIMEOUT_MS);
+
+      let res: Response;
+      try {
+        setInferenceStage('文件解析完成，正在调用大模型推断时间、地点与预算...');
+        res = await fetch('/api/records/infer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            files: preparedFiles,
+            historyRecords: compactHistory,
+          }),
+          signal: inferController.signal,
+        });
+      } catch (fetchErr: any) {
+        if (fetchErr?.name === 'AbortError') {
+          throw new Error(
+            `智能识别请求超时（${Math.round(INFER_REQUEST_TIMEOUT_MS / 1000)} 秒内服务器未响应），请稍后重试或手动填写`
+          );
+        }
+        throw new Error(fetchErr?.message || '网络请求失败，请检查连接后重试');
+      } finally {
+        clearTimeout(inferTimer);
+      }
 
       const rawText = await res.text();
       let data: any = null;
@@ -701,6 +768,8 @@ function RecordFormContent({
         throw new Error(data?.error || `智能识别失败（HTTP ${res.status}），请重试`);
       }
 
+      if (!isCurrentRun()) return;
+
       if (data.source === 'local_fallback') {
         setInferenceSource('local_fallback');
         if (data.llmError) {
@@ -718,9 +787,15 @@ function RecordFormContent({
       applyInferredValues(data.data);
     } catch (err: any) {
       console.error('Smart inference failed:', err);
-      setInferenceError(err?.message || '智能识别失败，请检查文件后重试或手动填写');
+      if (isCurrentRun()) {
+        setInferenceError(err?.message || '智能识别失败，请检查文件后重试或手动填写');
+      }
     } finally {
-      setIsInferring(false);
+      // A superseded run must not clear the spinner of the newer run.
+      if (isCurrentRun()) {
+        setIsInferring(false);
+        setInferenceStage(null);
+      }
     }
   };
 
@@ -1252,7 +1327,9 @@ function RecordFormContent({
               {isInferring && (
                 <div className="mt-2.5 bg-white/90 border border-blue-200 rounded-lg px-3 py-2 flex items-center gap-2 text-xs text-blue-800">
                   <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600 shrink-0" />
-                  <span>正在智能解析上传通知并结合历史记录推断时间、地点与预算...</span>
+                  <span className="break-all min-w-0">
+                    {inferenceStage || '正在智能解析上传通知并结合历史记录推断时间、地点与预算...'}
+                  </span>
                 </div>
               )}
 

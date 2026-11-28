@@ -16,6 +16,10 @@ interface InferRequestBody {
   historyRecords?: HistoryContextItem[];
 }
 
+/** Upstream LLM time budgets. Worst case (vision timeout + text-only retry) stays under the client's 150s budget. */
+const TEXT_REQUEST_TIMEOUT_MS = 45_000;
+const IMAGE_REQUEST_TIMEOUT_MS = 75_000;
+
 function extractJsonFromText(raw: string): any {
   const trimmed = (raw || '').trim();
   if (!trimmed) throw new Error('模型返回内容为空');
@@ -79,11 +83,17 @@ async function callOpenAICompatibleLLM(
         { role: 'user', content: userContent },
       ],
       temperature: typeof temperature === 'number' ? temperature : 0.3,
+      // Bound the reply so a runaway generation cannot hold the request open.
+      max_tokens: 1500,
     };
 
     if (useJsonMode) {
       payload.response_format = { type: 'json_object' };
     }
+
+    // Hard upper bound for the upstream call: without it a stalled gateway would keep
+    // the browser in "识别中" forever instead of falling back to the local heuristic.
+    const budgetMs = useImages && imageUrls.length > 0 ? IMAGE_REQUEST_TIMEOUT_MS : TEXT_REQUEST_TIMEOUT_MS;
 
     return fetch(endpoint, {
       method: 'POST',
@@ -92,11 +102,37 @@ async function callOpenAICompatibleLLM(
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(budgetMs),
     });
   };
 
-  // Attempt 1: with images (if any) + json_object mode
-  let res = await makeRequest(imageUrls.length > 0, true);
+  // Attempt 1: with images (if any) + json_object mode.
+  // Vision requests are the slow path, so a transport failure (timeout / network) with
+  // images gets one text-only retry before the caller falls back to the local heuristic.
+  const usedImages = imageUrls.length > 0;
+  const requestUpstream = async (withImages: boolean): Promise<Response> => {
+    try {
+      return await makeRequest(withImages, true);
+    } catch (err: any) {
+      const isTimeout = err?.name === 'TimeoutError' || err?.name === 'AbortError';
+      const transportError = new Error(
+        isTimeout ? '大模型响应超时' : `大模型连接失败（${err?.message || err?.cause?.message || '网络错误'}）`
+      );
+      (transportError as any).isTransportError = true;
+      throw transportError;
+    }
+  };
+
+  let res: Response;
+  try {
+    res = await requestUpstream(usedImages);
+  } catch (transportErr: any) {
+    if (!usedImages) throw transportErr;
+    console.warn(
+      `Vision inference failed (${transportErr?.message}), retrying text-only`
+    );
+    res = await requestUpstream(false);
+  }
 
   // If rejected due to response_format or image_url incompatibility (400/422), retry gracefully
   if (!res.ok && (res.status === 400 || res.status === 422)) {
@@ -223,6 +259,7 @@ ${JSON.stringify(mergedHistory, null, 2)}
 2. budgetBreakdown 请结合历史相同/相近目的地与天数的标准进行估算，当天往返住宿费 accommodation 应为 0。`;
 
     // Call backend-configured LLM (OpenAI-compatible endpoint from /admin)
+    const startedAt = Date.now();
     try {
       if (!settings.baseUrl || !settings.apiKey || !settings.textModel) {
         throw new Error('后台大模型参数未完整配置，请前往管理后台配置接口地址、密钥与模型名称。');
@@ -237,6 +274,10 @@ ${JSON.stringify(mergedHistory, null, 2)}
         userPrompt,
         imageUrls
       );
+      console.log(
+      `[infer] source=llm model=${settings.textModel} files=${files.length} images=${imageUrls.length} ` +
+        `textChars=${docTextBlocks.join('').length} latency=${Date.now() - startedAt}ms`
+    );
 
       const inferred = extractJsonFromText(rawReply);
 
@@ -298,7 +339,10 @@ ${JSON.stringify(mergedHistory, null, 2)}
       });
     } catch (llmErr: any) {
       const llmErrorMsg = llmErr?.message || '后台大模型请求失败';
-      console.warn('Configured LLM failed, falling back to local heuristic + history:', llmErrorMsg);
+      console.warn(
+        `Configured LLM failed after ${Date.now() - startedAt}ms, falling back to local heuristic + history:`,
+        llmErrorMsg
+      );
 
       const fallback = inferLocallyFromTextAndHistory(
         files.map((f) => ({ name: f.name, extractedText: f.extractedText })),
